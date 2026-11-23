@@ -62,6 +62,7 @@ from core.user_settings import load_user_settings, save_user_settings
 from ui.export_dialog import ExportProgressDialog
 from ui.help_dialog import HelpDialog
 from ui.style_preview import StylePreviewWidget
+from ui.transcribe_dialog import TranscribeProgressDialog
 from workers.render_worker import RenderWorker
 from workers.transcribe_worker import TranscribeWorker
 
@@ -397,6 +398,8 @@ class MainWindow(QMainWindow):
         self._update_check_worker: UpdateCheckWorker | None = None
         self._update_install_worker: UpdateInstallWorker | None = None
         self._update_progress_dialog: QProgressDialog | None = None
+        self._transcribe_dialog: TranscribeProgressDialog | None = None
+        self._transcribe_cancelled_by_user: bool = False
         self._export_dialog: ExportProgressDialog | None = None
         self._is_busy = False
         self._updating_table = False
@@ -597,12 +600,6 @@ class MainWindow(QMainWindow):
         self.transcribe_btn.setObjectName("ActionButton")
         self.transcribe_btn.clicked.connect(self._on_start_transcribe)
 
-        self.cancel_btn = QPushButton()
-        self.cancel_btn.setObjectName("DangerButton")
-        self.cancel_btn.setFixedHeight(34)
-        self.cancel_btn.setVisible(False)
-        self.cancel_btn.clicked.connect(self._on_cancel_worker)
-
         controls_row.addWidget(self.audio_lang_label)
         controls_row.addWidget(self.lang_combo, stretch=1)
         controls_row.addSpacing(6)
@@ -610,7 +607,6 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.model_combo, stretch=1)
         controls_row.addSpacing(8)
         controls_row.addWidget(self.transcribe_btn)
-        controls_row.addWidget(self.cancel_btn)
         step1_layout.addLayout(controls_row)
 
         left_col.addWidget(step1_card)
@@ -1012,7 +1008,6 @@ class MainWindow(QMainWindow):
         self.output_label.setText(self._t("label_output_file"))
         self.output_path_edit.setPlaceholderText(self._t("placeholder_output"))
         self.browse_output_btn.setText(self._t("btn_browse_output"))
-        self.cancel_btn.setText(self._t("btn_cancel"))
         self.export_btn.setText(self._t("btn_export"))
 
         if self._status_i18n_key:
@@ -1737,7 +1732,7 @@ class MainWindow(QMainWindow):
             raise ValueError(self._t("err_empty_cues"))
         return cues
 
-    def _set_busy(self, busy: bool, *, show_inline_cancel: bool = False) -> None:
+    def _set_busy(self, busy: bool) -> None:
         self._is_busy = busy
         self.drop_zone.setEnabled(not busy)
         self.browse_video_btn.setEnabled(not busy)
@@ -1753,8 +1748,6 @@ class MainWindow(QMainWindow):
         self._sync_preset_control_states()
         self.output_path_edit.setEnabled(not busy)
         self.browse_output_btn.setEnabled(not busy)
-        self.cancel_btn.setVisible(busy and show_inline_cancel)
-        self.cancel_btn.setEnabled(busy and show_inline_cancel)
 
         self._update_action_states()
 
@@ -1783,16 +1776,30 @@ class MainWindow(QMainWindow):
         language = str(self.lang_combo.currentData() or "auto")
         model_name = str(self.model_combo.currentData() or "base")
 
-        self._set_busy(True, show_inline_cancel=True)
+        self._transcribe_cancelled_by_user = False
+        self._set_busy(True)
         self._set_status_key("status_transcribing", model=model_name)
+
+        transcribe_dlg = TranscribeProgressDialog(
+            model_name=model_name,
+            vulkan_available=self._hardware_profile.vulkan_available,
+            lang=self._lang,
+            parent=self,
+        )
+        transcribe_dlg.cancel_requested.connect(self._on_cancel_worker)
+        self._transcribe_dialog = transcribe_dlg
+        transcribe_dlg.show()
 
         worker = TranscribeWorker(
             video_path=self._video_info.path,
             language=language,
             model_name=model_name,
             device=self._hardware_profile.opencaption_device,
+            lang=self._lang,
+            duration_seconds=self._video_info.duration_seconds,
             parent=self,
         )
+        worker.progress_changed.connect(transcribe_dlg.update_progress)
         worker.status_changed.connect(self._set_raw_status)
         worker.finished_success.connect(self._on_transcribe_finished)
         worker.error_occurred.connect(self._on_transcribe_error)
@@ -1802,8 +1809,18 @@ class MainWindow(QMainWindow):
 
     def _on_transcribe_finished(self, cues: list) -> None:
         self._transcribe_worker = None
+        self._transcribe_cancelled_by_user = False
         self._set_busy(False)
         self._populate_cues_table(cues)
+
+        if cues and self.cue_table.rowCount() > 0:
+            self.cue_table.selectRow(0)
+
+        dlg = self._transcribe_dialog
+        self._transcribe_dialog = None
+        if dlg is not None:
+            dlg.finished.connect(dlg.deleteLater)
+            dlg.mark_completed()
 
         if cues:
             flagged = sum(
@@ -1821,10 +1838,23 @@ class MainWindow(QMainWindow):
             self._set_status_key("status_transcribe_empty")
 
     def _on_transcribe_error(self, message: str) -> None:
+        worker = self._transcribe_worker
+        was_cancelled = self._transcribe_cancelled_by_user or (
+            worker is not None and worker.was_cancelled
+        )
         self._transcribe_worker = None
+        self._transcribe_cancelled_by_user = False
         self._set_busy(False)
+
+        dlg = self._transcribe_dialog
+        self._transcribe_dialog = None
+        if dlg is not None:
+            dlg.mark_failed()
+            dlg.deleteLater()
+
         self._set_status_key("status_transcribe_failed")
-        QMessageBox.warning(self, self._t("dlg_transcribe_error_title"), message)
+        if not was_cancelled:
+            QMessageBox.warning(self, self._t("dlg_transcribe_error_title"), message)
 
     def _on_start_export(self) -> None:
         if self._video_info is None or self._is_busy:
@@ -1853,7 +1883,7 @@ class MainWindow(QMainWindow):
         preset = self._current_preset()
         ass_config = self._build_ass_config()
 
-        self._set_busy(True, show_inline_cancel=False)
+        self._set_busy(True)
         self._set_status_key("status_export_starting")
 
         export_dlg = ExportProgressDialog(
@@ -1929,12 +1959,11 @@ class MainWindow(QMainWindow):
 
     def _on_cancel_worker(self) -> None:
         if self._transcribe_worker is not None:
+            self._transcribe_cancelled_by_user = True
             self._set_status_key("status_cancel_transcribe")
-            self.cancel_btn.setEnabled(False)
             self._transcribe_worker.cancel()
         elif self._render_worker is not None:
             self._set_status_key("status_cancel_render")
-            self.cancel_btn.setEnabled(False)
             self._render_worker.cancel()
 
     def _open_output_folder(self, output_path: str) -> None:

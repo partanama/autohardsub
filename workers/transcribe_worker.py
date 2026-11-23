@@ -14,6 +14,7 @@ from typing import Callable
 
 from PySide6.QtCore import QObject, QThread, Signal
 
+from core.i18n import tr
 from core.paths import (
     SUBPROCESS_NO_WINDOW,
     get_ffmpeg_path,
@@ -24,6 +25,12 @@ from core.paths import (
 from workers import iter_subprocess_lines
 
 _SPECIAL_TOKEN_RE = re.compile(r"^(\[_.*\]|<\|.*\|>)$")
+_FFMPEG_TIME_RE = re.compile(r"time=(\d{2,}):(\d{2}):(\d{2}(?:\.\d+)?)")
+_WHISPER_PROGRESS_RE = re.compile(r"progress\s*=\s*(\d{1,3})\s*%", re.IGNORECASE)
+_PERCENT_FALLBACK_RE = re.compile(r"(\d{1,3})\s*%")
+_WHISPER_TS_RE = re.compile(
+    r"\[\d{2}:\d{2}:\d{2}\.\d+\s*-->\s*(\d{2}):(\d{2}):(\d{2}\.\d+)\]"
+)
 
 _MODEL_URLS: dict[str, str] = {
     "tiny": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin",
@@ -217,6 +224,7 @@ def parse_whisper_ojf_json(payload: dict) -> list[dict]:
 class TranscribeWorker(QThread):
     """Run whisper-cli -ojf (with opencaption fallback) in a background thread."""
 
+    progress_changed = Signal(int, str)
     status_changed = Signal(str)
     finished_success = Signal(list)
     error_occurred = Signal(str)
@@ -231,6 +239,8 @@ class TranscribeWorker(QThread):
         models_dir: Path | str | None = None,
         whisper_cli_path: str | None = None,
         ffmpeg_path: str | None = None,
+        lang: str = "en",
+        duration_seconds: float = 0.0,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -242,8 +252,19 @@ class TranscribeWorker(QThread):
         self._models_dir = Path(models_dir) if models_dir else None
         self._whisper_cli_path = whisper_cli_path
         self._ffmpeg_path = ffmpeg_path
+        self._lang = lang
+        self._duration_seconds = max(0.0, float(duration_seconds or 0.0))
         self._process: subprocess.Popen[bytes] | None = None
         self._cancelled = False
+
+    @property
+    def was_cancelled(self) -> bool:
+        return self._cancelled
+
+    def _emit_progress(self, percent: int, text: str) -> None:
+        clamped = max(0, min(100, int(percent)))
+        self.progress_changed.emit(clamped, text)
+        self.status_changed.emit(text)
 
     def cancel(self) -> None:
         """Request cancellation and terminate any active transcription subprocess."""
@@ -278,12 +299,30 @@ class TranscribeWorker(QThread):
 
         if self._cancelled and self._process.poll() is None:
             try:
+                self._process.terminate()
+                self._process.wait(timeout=1.5)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    self._process.kill()
+                except OSError:
+                    pass
+
+        try:
+            return_code = self._process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
                 self._process.kill()
             except OSError:
                 pass
+            return_code = self._process.wait()
+        finally:
+            if self._process.stdout is not None:
+                try:
+                    self._process.stdout.close()
+                except OSError:
+                    pass
+            self._process = None
 
-        return_code = self._process.wait()
-        self._process = None
         return return_code, "\n".join(tail_logs)
 
     def _ensure_model_file(self, models_dir: Path) -> Path:
@@ -309,8 +348,9 @@ class TranscribeWorker(QThread):
             f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{base_name}.bin",
         )
         part_path = target_path.with_suffix(".bin.part")
-        self.status_changed.emit(
-            f"Mengunduh model Whisper '{base_name}' ke folder lokal..."
+        self._emit_progress(
+            0,
+            tr(self._lang, "transcribe_stage_download", model=base_name),
         )
 
         req = urllib.request.Request(
@@ -341,12 +381,26 @@ class TranscribeWorker(QThread):
                             if total_bytes > 0:
                                 total_mb = total_bytes / (1024 * 1024)
                                 pct = int(min(100, (downloaded / total_bytes) * 100))
-                                self.status_changed.emit(
-                                    f"Mengunduh model '{base_name}': {dl_mb:.1f} / {total_mb:.1f} MB ({pct}%)"
+                                self._emit_progress(
+                                    0,
+                                    tr(
+                                        self._lang,
+                                        "transcribe_stage_download_pct",
+                                        model=base_name,
+                                        dl_mb=dl_mb,
+                                        total_mb=total_mb,
+                                        pct=pct,
+                                    ),
                                 )
                             else:
-                                self.status_changed.emit(
-                                    f"Mengunduh model '{base_name}': {dl_mb:.1f} MB..."
+                                self._emit_progress(
+                                    0,
+                                    tr(
+                                        self._lang,
+                                        "transcribe_stage_download_mb",
+                                        model=base_name,
+                                        dl_mb=dl_mb,
+                                    ),
                                 )
 
             part_path.replace(target_path)
@@ -365,19 +419,25 @@ class TranscribeWorker(QThread):
         if self._cancelled:
             return None
 
-        with tempfile.TemporaryDirectory(prefix="autohardsub_tr_") as tmpdir:
+        with tempfile.TemporaryDirectory(
+            prefix="autohardsub_tr_", ignore_cleanup_errors=True
+        ) as tmpdir:
             tmp_root = Path(tmpdir)
             temp_wav = tmp_root / "audio_16k.wav"
             temp_json_prefix = tmp_root / "transcript"
             temp_json = tmp_root / "transcript.json"
 
-            self.status_changed.emit("Mengekstrak audio 16kHz untuk transkripsi AI...")
+            # Stage 1: Extracting audio track via FFmpeg (0% -> 15%)
+            extract_text = tr(self._lang, "transcribe_stage_extract_audio")
+            self._emit_progress(2, extract_text)
+
             ffmpeg_cmd = [
                 ffmpeg_bin,
                 "-y",
                 "-hide_banner",
                 "-loglevel",
                 "error",
+                "-stats",
                 "-i",
                 str(self._video_path),
                 "-vn",
@@ -389,7 +449,28 @@ class TranscribeWorker(QThread):
                 "1",
                 str(temp_wav),
             ]
-            rc, err_detail = self._run_cli_process(ffmpeg_cmd)
+
+            last_ff_pct = 2
+
+            def _on_ffmpeg_line(line: str) -> None:
+                nonlocal last_ff_pct
+                if self._duration_seconds <= 0.0:
+                    return
+                m = _FFMPEG_TIME_RE.search(line)
+                if not m:
+                    return
+                secs = (
+                    int(m.group(1)) * 3600.0
+                    + int(m.group(2)) * 60.0
+                    + float(m.group(3))
+                )
+                ratio = max(0.0, min(1.0, secs / self._duration_seconds))
+                pct = 2 + int(round(ratio * 12))  # 2% -> 14%
+                if pct > last_ff_pct:
+                    last_ff_pct = pct
+                    self._emit_progress(pct, extract_text)
+
+            rc, err_detail = self._run_cli_process(ffmpeg_cmd, on_line=_on_ffmpeg_line)
             if self._cancelled:
                 return None
             if rc != 0 or not temp_wav.is_file():
@@ -397,26 +478,76 @@ class TranscribeWorker(QThread):
                     f"FFmpeg gagal mengekstrak audio WAV (kode {rc}):\n{err_detail}"
                 )
 
-            lang_arg = "auto" if not self._language or self._language == "auto" else self._language
+            # Stage 2: Loading Whisper model & transcribing audio (15% -> 92%)
+            loading_text = tr(
+                self._lang, "transcribe_stage_loading_model", model=self._model_name
+            )
+            self._emit_progress(15, loading_text)
+
+            lang_arg = (
+                "auto"
+                if not self._language or self._language == "auto"
+                else self._language
+            )
             whisper_cmd = [
                 whisper_cli_bin,
                 "-m",
                 str(model_bin_path),
                 "-l",
                 lang_arg,
+                "-pp",
                 "-ojf",
                 "-of",
                 str(temp_json_prefix),
                 str(temp_wav),
             ]
 
-            self.status_changed.emit(
-                f"Mentranskrip audio per kata (model {self._model_name})..."
-            )
+            last_whisper_pct = 15
+            last_raw_pct = -1
 
             def _on_whisper_line(line: str) -> None:
-                if "progress" in line.lower() and "%" in line:
-                    self.status_changed.emit(f"Memproses audio: {line}")
+                nonlocal last_whisper_pct, last_raw_pct
+                raw_pct: int | None = None
+
+                match = _WHISPER_PROGRESS_RE.search(line)
+                if match:
+                    raw_pct = max(0, min(100, int(match.group(1))))
+                elif "progress" in line.lower() and "%" in line:
+                    fallback = _PERCENT_FALLBACK_RE.search(line)
+                    if fallback:
+                        raw_pct = max(0, min(100, int(fallback.group(1))))
+                elif self._duration_seconds > 0.0:
+                    ts_match = _WHISPER_TS_RE.search(line)
+                    if ts_match:
+                        end_sec = (
+                            int(ts_match.group(1)) * 3600.0
+                            + int(ts_match.group(2)) * 60.0
+                            + float(ts_match.group(3))
+                        )
+                        raw_pct = max(
+                            0,
+                            min(100, int(round((end_sec / self._duration_seconds) * 100))),
+                        )
+
+                if raw_pct is not None:
+                    mapped = 18 + int(round(raw_pct * 0.74))  # 18% -> 92%
+                    if mapped > last_whisper_pct or raw_pct > last_raw_pct:
+                        last_whisper_pct = max(last_whisper_pct, mapped)
+                        last_raw_pct = max(last_raw_pct, raw_pct)
+                        self._emit_progress(
+                            last_whisper_pct,
+                            tr(
+                                self._lang,
+                                "transcribe_stage_transcribing",
+                                model=self._model_name,
+                                pct=last_raw_pct,
+                            ),
+                        )
+                elif last_whisper_pct < 17 and (
+                    "whisper_init_state" in line or "ggml_vulkan" in line.lower()
+                ):
+                    last_whisper_pct = 17
+                    self._emit_progress(17, loading_text)
 
             rc, err_detail = self._run_cli_process(whisper_cmd, on_line=_on_whisper_line)
             if self._cancelled:
@@ -430,10 +561,15 @@ class TranscribeWorker(QThread):
                     "whisper-cli selesai tanpa menghasilkan file JSON -ojf."
                 )
 
-            self.status_changed.emit("Membaca timestamp dan keyakinan per kata...")
+            # Stage 3: Parsing -ojf word-level JSON timestamps & bridging BPE sub-words (92% -> 100%)
+            self._emit_progress(93, tr(self._lang, "transcribe_stage_parsing"))
             with temp_json.open("r", encoding="utf-8-sig") as fh:
                 payload = json.load(fh)
-            return parse_whisper_ojf_json(payload)
+            cues = parse_whisper_ojf_json(payload)
+            if self._cancelled:
+                return None
+            self._emit_progress(100, tr(self._lang, "transcribe_dlg_done"))
+            return cues
 
     def _parse_opencaption_json(self, json_path: Path) -> list[dict]:
         with json_path.open("r", encoding="utf-8-sig") as fh:
@@ -473,7 +609,9 @@ class TranscribeWorker(QThread):
         opencaption_bin: str,
         models_dir: Path,
     ) -> list[dict] | None:
-        with tempfile.TemporaryDirectory(prefix="autohardsub_tr_") as tmpdir:
+        with tempfile.TemporaryDirectory(
+            prefix="autohardsub_tr_", ignore_cleanup_errors=True
+        ) as tmpdir:
             temp_json = Path(tmpdir) / "transcript.json"
             cmd = [
                 opencaption_bin,
@@ -493,8 +631,9 @@ class TranscribeWorker(QThread):
                 str(temp_json),
             ]
 
-            self.status_changed.emit(
-                f"Menyiapkan transkripsi AI via OpenCaption (model {self._model_name})..."
+            self._emit_progress(
+                10,
+                tr(self._lang, "transcribe_stage_opencaption", model=self._model_name),
             )
             downloading_notified = False
             transcribing_notified = False
@@ -506,14 +645,26 @@ class TranscribeWorker(QThread):
                     kw in lower for kw in ("download", "mengunduh", "fetch", "http")
                 ):
                     downloading_notified = True
-                    self.status_changed.emit(
-                        f"Mengunduh model Whisper '{self._model_name}' ke folder lokal..."
+                    self._emit_progress(
+                        0,
+                        tr(
+                            self._lang,
+                            "transcribe_stage_download",
+                            model=self._model_name,
+                        ),
                     )
                 elif not transcribing_notified and any(
                     kw in lower for kw in ("transcrib", "whisper", "audio", "process")
                 ):
                     transcribing_notified = True
-                    self.status_changed.emit("Sedang mentranskrip audio menjadi teks...")
+                    self._emit_progress(
+                        25,
+                        tr(
+                            self._lang,
+                            "transcribe_stage_loading_model",
+                            model=self._model_name,
+                        ),
+                    )
 
             rc, err_detail = self._run_cli_process(cmd, on_line=_on_oc_line)
             if self._cancelled:
@@ -527,8 +678,12 @@ class TranscribeWorker(QThread):
                     "OpenCaption selesai tanpa menghasilkan file JSON transkrip."
                 )
 
-            self.status_changed.emit("Membaca hasil transkrip...")
-            return self._parse_opencaption_json(temp_json)
+            self._emit_progress(93, tr(self._lang, "transcribe_stage_parsing"))
+            cues = self._parse_opencaption_json(temp_json)
+            if self._cancelled:
+                return None
+            self._emit_progress(100, tr(self._lang, "transcribe_dlg_done"))
+            return cues
 
     def run(self) -> None:
         if not Path(self._video_path).is_file():

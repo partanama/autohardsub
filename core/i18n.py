@@ -1,0 +1,284 @@
+"""Bilingual internationalization (Indonesian & English) for AutoHardsub."""
+
+from __future__ import annotations
+
+from typing import Any
+
+DEFAULT_LANGUAGE = "id"
+SUPPORTED_LANGUAGES: tuple[tuple[str, str], ...] = (
+    ("ID", "id"),
+    ("EN", "en"),
+)
+
+TRANSLATIONS: dict[str, dict[str, str]] = {
+    "id": {
+        # Window & Header
+        "window_title": "AutoHardsub — Transkrip AI & Burn-In Subtitle Otomatis",
+        "app_title": "AutoHardsub",
+        "app_subtitle": "Buat subtitle otomatis dengan AI lalu tempel permanen (hardsub) dalam satu aplikasi.",
+        "ui_lang_label": "Bahasa UI:",
+        "ui_lang_tooltip": "Ganti bahasa antarmuka aplikasi (Indonesia / English)",
+        # Hardware badges
+        "hw_badge_format": "Mode Performa: {transcribe} (Transkrip) + {render} (Render)",
+        "hw_badge_cpu_only": "Mode Performa: CPU Standard",
+        "hw_transcribe_vulkan": "GPU Vulkan",
+        "hw_transcribe_cpu": "CPU",
+        "hw_render_nvenc": "GPU NVIDIA (NVENC)",
+        "hw_render_qsv": "GPU Intel (QuickSync)",
+        "hw_render_mf": "GPU Windows (MediaFoundation)",
+        "hw_render_cpu": "CPU",
+        # Warning banner
+        "warning_missing_bins": (
+            "Perhatian: Program eksternal belum ditemukan ({missing}). "
+            "Letakkan file tersebut di folder assets/bin/ atau tambahkan ke PATH sistem."
+        ),
+        # Step 1
+        "step1_title": "Langkah 1 — Pilih Video & Pengaturan Transkrip AI",
+        "drop_prompt": "Tarik & lepas file video ke sini, atau klik 'Pilih Video'",
+        "drop_hint": "Mendukung MP4, MKV, MOV, AVI, WEBM (otomatis mendeteksi 16:9 & 9:16)",
+        "btn_browse_video": "Pilih Video",
+        "label_audio_lang": "Bahasa:",
+        "lang_auto": "Otomatis",
+        "lang_id": "Indonesia",
+        "lang_en": "Inggris",
+        "label_ai_model": "Model AI:",
+        "model_base": "Cepat - Base",
+        "model_small": "Akurat - Small",
+        "model_large_v3": "Maksimal - Large-v3",
+        "tooltip_model": "Model Whisper akan diunduh otomatis ke:\n{models_dir}",
+        "btn_transcribe": "1. Buat Transkrip",
+        "orientation_vertical": "Vertikal (9:16)",
+        "orientation_square": "Persegi (1:1)",
+        "orientation_horizontal": "Horizontal (16:9)",
+        "video_meta_format": "{width}×{height} • {orientation} • Durasi {duration}",
+        # Step 2
+        "step2_title": "Langkah 2 — Periksa & Edit Teks Subtitle",
+        "cue_count": "{count} baris",
+        "btn_add_row": "Tambah Baris",
+        "btn_remove_row": "Hapus Baris",
+        "confidence_legend": (
+            "Baris berwarna kuning/merah menandakan kata dengan tingkat keyakinan AI rendah "
+            "— klik sel teks untuk koreksi."
+        ),
+        "col_start": "Mulai",
+        "col_end": "Selesai",
+        "col_text": "Teks Subtitle",
+        "tooltip_typo_words": "Periksa kemungkinan typo: {words}",
+        "tooltip_typo_conf": "Periksa kemungkinan typo (keyakinan AI: {pct}%)",
+        # Step 3 — Styling & Export
+        "step3_title": "Langkah 3 — Gaya Subtitle & Export Video",
+        "label_preset": "Gaya Subtitle:",
+        "label_font_family": "Jenis Font:",
+        "label_font_size": "Ukuran Font:",
+        "label_outline_width": "Tebal Outline:",
+        "label_margin_v": "Posisi Vertikal:",
+        "label_primary_color": "Warna Font:",
+        "label_highlight_color": "Warna Highlight:",
+        "label_outline_color": "Warna Outline:",
+        "label_bg_box_color": "Warna Background Teks:",
+        "chk_enable_bg_box": "Aktifkan Background Box",
+        "label_bg_box_opacity": "Transparansi Background:",
+        "tooltip_primary_color": "Pilih warna utama teks subtitle",
+        "tooltip_highlight_color": "Pilih warna sorotan kata aktif (untuk preset Pop / Karaoke)",
+        "tooltip_outline_color": "Pilih warna garis tepi (outline) huruf",
+        "tooltip_bg_box_color": "Pilih warna latar kotak belakang teks",
+        "tooltip_bg_box_toggle": "Gunakan kotak latar belakang di belakang teks (ASS BorderStyle=3)",
+        "tooltip_bg_box_opacity": "Atur tingkat opasitas kotak latar belakang (0% transparan – 100% solid)",
+        "color_dialog_title": "Pilih Warna — {target}",
+        "label_output_file": "File Output:",
+        "placeholder_output": "Otomatis: <nama_video>_hardsub.mp4",
+        "btn_browse_output": "Ubah...",
+        "btn_cancel": "Batal",
+        "btn_export": "2. Export Video Hardsub",
+        # Presets
+        "preset_youtube_clean_name": "YouTube Clean",
+        "preset_youtube_clean_desc": "Teks putih bersih dengan garis tepi hitam dan bayangan halus.",
+        "preset_reels_pop_name": "Reels / Shorts Pop Kuning",
+        "preset_reels_pop_desc": "Sorotan kuning per kata dengan efek membal (bounce) untuk video vertikal.",
+        "preset_karaoke_wipe_name": "Karaoke Wipe",
+        "preset_karaoke_wipe_desc": "Transisi warna halus kiri-ke-kanan dari putih ke kuning per kata.",
+        "preset_box_kontras_name": "Box Kontras (TikTok Style)",
+        "preset_box_kontras_desc": "Latar kotak hitam semi-transparan dengan teks putih kontras tinggi.",
+        # Status messages
+        "status_ready": "Siap. Pilih video untuk memulai.",
+        "status_video_loaded": "Video dimuat. Klik '1. Buat Transkrip' atau tambah subtitle manual.",
+        "status_transcribing": "Menjalankan transkripsi AI (model {model})...",
+        "status_transcribe_done_flagged": (
+            "Transkrip selesai: {count} baris subtitle ({flagged} baris ditandai untuk diperiksa)."
+        ),
+        "status_transcribe_done": "Transkrip selesai: {count} baris subtitle siap diperiksa.",
+        "status_transcribe_empty": "Transkrip selesai, namun tidak ada ucapan terdeteksi di video ini.",
+        "status_transcribe_failed": "Transkripsi gagal atau dibatalkan.",
+        "status_export_starting": "Memulai proses burn-in subtitle...",
+        "status_export_done": "Selesai! Video tersimpan di: {filename}",
+        "status_export_failed": "Export video gagal atau dibatalkan.",
+        "status_cancel_transcribe": "Membatalkan transkripsi...",
+        "status_cancel_render": "Membatalkan proses render...",
+        # Dialogs & validation
+        "dlg_select_video_title": "Pilih File Video",
+        "dlg_video_filter": "File Video (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.ts *.flv);;Semua File (*.*)",
+        "dlg_save_video_title": "Simpan Video Hardsub",
+        "dlg_mp4_filter": "Video MP4 (*.mp4)",
+        "dlg_video_error_title": "Gagal Membaca Video",
+        "dlg_transcribe_error_title": "Transkripsi Gagal",
+        "dlg_check_subtitle_title": "Periksa Subtitle",
+        "dlg_invalid_output_title": "Path Output Tidak Valid",
+        "dlg_invalid_output_msg": "File output tidak boleh menimpa file video sumber secara langsung.",
+        "dlg_export_success_title": "Export Berhasil",
+        "dlg_export_success_text": "Video hardsub berhasil dibuat!",
+        "dlg_export_success_info": "Lokasi file:\n{path}",
+        "btn_open_folder": "Buka Folder Hasil",
+        "btn_close": "Tutup",
+        "dlg_export_error_title": "Export Gagal",
+        "dlg_busy_close_title": "Proses Sedang Berjalan",
+        "dlg_busy_close_msg": "Ada proses yang masih berjalan. Hentikan proses dan tutup aplikasi?",
+        "err_row_prefix": "Baris {row}: {error}",
+        "err_row_end_before_start": "Baris {row}: Waktu selesai harus lebih besar dari waktu mulai.",
+        "err_empty_cues": "Daftar subtitle masih kosong. Buat transkrip atau tambah baris terlebih dahulu.",
+    },
+    "en": {
+        # Window & Header
+        "window_title": "AutoHardsub — AI Transcription & Automatic Subtitle Burn-In",
+        "app_title": "AutoHardsub",
+        "app_subtitle": "Generate AI subtitles automatically and burn them into your video in one app.",
+        "ui_lang_label": "UI Language:",
+        "ui_lang_tooltip": "Switch application interface language (Indonesian / English)",
+        # Hardware badges
+        "hw_badge_format": "Performance Mode: {transcribe} (Transcribe) + {render} (Render)",
+        "hw_badge_cpu_only": "Performance Mode: Standard CPU",
+        "hw_transcribe_vulkan": "Vulkan GPU",
+        "hw_transcribe_cpu": "CPU",
+        "hw_render_nvenc": "GPU NVIDIA (NVENC)",
+        "hw_render_qsv": "GPU Intel (QuickSync)",
+        "hw_render_mf": "GPU Windows (MediaFoundation)",
+        "hw_render_cpu": "CPU",
+        # Warning banner
+        "warning_missing_bins": (
+            "Warning: External binaries not found ({missing}). "
+            "Place them inside assets/bin/ or add them to your system PATH."
+        ),
+        # Step 1
+        "step1_title": "Step 1 — Select Video & AI Transcription Settings",
+        "drop_prompt": "Drag & drop a video file here, or click 'Select Video'",
+        "drop_hint": "Supports MP4, MKV, MOV, AVI, WEBM (auto-detects 16:9 & 9:16)",
+        "btn_browse_video": "Select Video",
+        "label_audio_lang": "Language:",
+        "lang_auto": "Auto-Detect",
+        "lang_id": "Indonesian",
+        "lang_en": "English",
+        "label_ai_model": "AI Model:",
+        "model_base": "Fast - Base",
+        "model_small": "Accurate - Small",
+        "model_large_v3": "Best - Large-v3",
+        "tooltip_model": "Whisper models will be downloaded automatically to:\n{models_dir}",
+        "btn_transcribe": "1. Generate Transcript",
+        "orientation_vertical": "Vertical (9:16)",
+        "orientation_square": "Square (1:1)",
+        "orientation_horizontal": "Horizontal (16:9)",
+        "video_meta_format": "{width}×{height} • {orientation} • Duration {duration}",
+        # Step 2
+        "step2_title": "Step 2 — Review & Edit Subtitle Text",
+        "cue_count": "{count} lines",
+        "btn_add_row": "Add Row",
+        "btn_remove_row": "Delete Row",
+        "confidence_legend": (
+            "Yellow/red highlighted rows indicate low AI confidence words "
+            "— click the text cell to edit."
+        ),
+        "col_start": "Start",
+        "col_end": "End",
+        "col_text": "Subtitle Text",
+        "tooltip_typo_words": "Check possible typo: {words}",
+        "tooltip_typo_conf": "Check possible typo (AI confidence: {pct}%)",
+        # Step 3 — Styling & Export
+        "step3_title": "Step 3 — Subtitle Styling & Video Export",
+        "label_preset": "Subtitle Style:",
+        "label_font_family": "Font Family:",
+        "label_font_size": "Font Size:",
+        "label_outline_width": "Outline Width:",
+        "label_margin_v": "Vertical Margin:",
+        "label_primary_color": "Font Color:",
+        "label_highlight_color": "Highlight Color:",
+        "label_outline_color": "Outline Color:",
+        "label_bg_box_color": "Text Background Color:",
+        "chk_enable_bg_box": "Enable Text Background Box",
+        "label_bg_box_opacity": "Box Opacity:",
+        "tooltip_primary_color": "Choose the main subtitle text color",
+        "tooltip_highlight_color": "Choose the active word highlight color (for Pop / Karaoke presets)",
+        "tooltip_outline_color": "Choose the text outline stroke color",
+        "tooltip_bg_box_color": "Choose the text background box color",
+        "tooltip_bg_box_toggle": "Draw a background box behind subtitle text (ASS BorderStyle=3)",
+        "tooltip_bg_box_opacity": "Adjust background box opacity (0% transparent – 100% solid)",
+        "color_dialog_title": "Choose Color — {target}",
+        "label_output_file": "Output File:",
+        "placeholder_output": "Auto: <video_name>_hardsub.mp4",
+        "btn_browse_output": "Browse...",
+        "btn_cancel": "Cancel",
+        "btn_export": "2. Export Hardsub Video",
+        # Presets
+        "preset_youtube_clean_name": "YouTube Clean",
+        "preset_youtube_clean_desc": "Clean white text with crisp black outline and soft drop shadow.",
+        "preset_reels_pop_name": "Reels / Shorts Yellow Pop",
+        "preset_reels_pop_desc": "Per-word yellow highlight with bounce effect for vertical videos.",
+        "preset_karaoke_wipe_name": "Karaoke Wipe",
+        "preset_karaoke_wipe_desc": "Smooth left-to-right color wipe from white to yellow per word.",
+        "preset_box_kontras_name": "Contrast Box (TikTok Style)",
+        "preset_box_kontras_desc": "Semi-transparent dark box behind high-contrast white text.",
+        # Status messages
+        "status_ready": "Ready. Select a video to get started.",
+        "status_video_loaded": "Video loaded. Click '1. Generate Transcript' or add subtitles manually.",
+        "status_transcribing": "Running AI transcription (model {model})...",
+        "status_transcribe_done_flagged": (
+            "Transcription complete: {count} subtitle lines ({flagged} flagged for review)."
+        ),
+        "status_transcribe_done": "Transcription complete: {count} subtitle lines ready for review.",
+        "status_transcribe_empty": "Transcription complete, but no speech was detected in this video.",
+        "status_transcribe_failed": "Transcription failed or was cancelled.",
+        "status_export_starting": "Starting subtitle burn-in render...",
+        "status_export_done": "Done! Video saved to: {filename}",
+        "status_export_failed": "Video export failed or was cancelled.",
+        "status_cancel_transcribe": "Cancelling transcription...",
+        "status_cancel_render": "Cancelling video render...",
+        # Dialogs & validation
+        "dlg_select_video_title": "Select Video File",
+        "dlg_video_filter": "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.m4v *.ts *.flv);;All Files (*.*)",
+        "dlg_save_video_title": "Save Hardsub Video",
+        "dlg_mp4_filter": "MP4 Video (*.mp4)",
+        "dlg_video_error_title": "Failed to Read Video",
+        "dlg_transcribe_error_title": "Transcription Failed",
+        "dlg_check_subtitle_title": "Check Subtitles",
+        "dlg_invalid_output_title": "Invalid Output Path",
+        "dlg_invalid_output_msg": "Output file cannot directly overwrite the source video file.",
+        "dlg_export_success_title": "Export Complete",
+        "dlg_export_success_text": "Hardsub video has been created successfully!",
+        "dlg_export_success_info": "File location:\n{path}",
+        "btn_open_folder": "Open Output Folder",
+        "btn_close": "Close",
+        "dlg_export_error_title": "Export Failed",
+        "dlg_busy_close_title": "Process Running",
+        "dlg_busy_close_msg": "A process is still running. Stop it and close the application?",
+        "err_row_prefix": "Row {row}: {error}",
+        "err_row_end_before_start": "Row {row}: End time must be greater than start time.",
+        "err_empty_cues": "Subtitle list is empty. Generate a transcript or add rows first.",
+    },
+}
+
+
+def normalize_lang(lang_code: str | None) -> str:
+    """Normalize a language code to a supported UI language ('id' or 'en')."""
+    if not lang_code:
+        return DEFAULT_LANGUAGE
+    code = lang_code.strip().lower()
+    return code if code in TRANSLATIONS else DEFAULT_LANGUAGE
+
+
+def tr(lang_code: str, key: str, **kwargs: Any) -> str:
+    """Translate a key for the given language with optional format placeholders."""
+    lang = normalize_lang(lang_code)
+    template = TRANSLATIONS[lang].get(key) or TRANSLATIONS[DEFAULT_LANGUAGE].get(key, key)
+    if kwargs:
+        try:
+            return template.format(**kwargs)
+        except (KeyError, ValueError):
+            return template
+    return template

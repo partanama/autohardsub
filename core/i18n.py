@@ -6,8 +6,8 @@ from typing import Any
 
 DEFAULT_LANGUAGE = "id"
 SUPPORTED_LANGUAGES: tuple[tuple[str, str], ...] = (
-    ("ID", "id"),
-    ("EN", "en"),
+    ("Indonesia (ID)", "id"),
+    ("English (EN)", "en"),
 )
 
 TRANSLATIONS: dict[str, dict[str, str]] = {
@@ -79,7 +79,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "chk_enable_bg_box": "Aktifkan Background Box",
         "label_bg_box_opacity": "Transparansi Background:",
         "tooltip_primary_color": "Pilih warna utama teks subtitle",
-        "tooltip_highlight_color": "Pilih warna sorotan kata aktif (untuk preset Active Word Color / CapCut Pill / Pop / Karaoke)",
+        "tooltip_highlight_color": "Pilih warna sorotan kata aktif / kotak penekanan (untuk Active Word Color / CapCut Pill / Newspaper Cutout / Pop / Karaoke)",
         "tooltip_outline_color": "Pilih warna garis tepi (outline) huruf",
         "tooltip_bg_box_color": "Pilih warna latar kotak belakang teks",
         "tooltip_bg_box_toggle": "Gunakan kotak latar belakang di belakang teks (ASS BorderStyle=3)",
@@ -103,6 +103,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "preset_capcut_pill_desc": "Kotak kapsul berwarna mengikuti kata aktif secara halus dengan teks putih tetap diam (gaya CapCut).",
         "preset_active_word_color_name": "Active Word Color (News/Doc)",
         "preset_active_word_color_desc": "Semua kata tetap diam dengan outline hitam tegas, sementara kata yang sedang diucapkan berubah warna highlight (gaya Berita/Dokumenter).",
+        "preset_newspaper_cutout_name": "Newspaper Cutout (Editorial)",
+        "preset_newspaper_cutout_desc": "Gaya guntingan koran investigatif (1–3 kata): kotak kertas putih lurus dengan teks hitam bold, dan kata penting dalam kotak merah miring ber-font serif putih. Apit kata dengan *bintang* untuk penekanan manual.",
         # Status messages
         "status_ready": "Siap. Pilih video untuk memulai.",
         "status_video_loaded": "Video dimuat. Klik '1. Buat Transkrip' atau tambah subtitle manual.",
@@ -131,9 +133,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dlg_export_success_title": "Export Berhasil",
         "dlg_export_success_text": "Video hardsub berhasil dibuat!",
         "dlg_export_success_info": "Lokasi file:\n{path}",
+        "btn_open_file": "▶ Buka File",
         "btn_open_folder": "Buka Folder Hasil",
+        "btn_open_folder_short": "📂 Buka Folder",
         "btn_close": "Tutup",
         "dlg_export_error_title": "Export Gagal",
+        "export_dlg_title": "Export Video Hardsub",
+        "export_dlg_heading": "Mengekspor Video Hardsub",
+        "export_dlg_done_heading": "Render Selesai!",
+        "export_dlg_done": "✓ Render Selesai! Video hardsub siap diputar.",
+        "export_dlg_cancelling": "Membatalkan...",
         "dlg_busy_close_title": "Proses Sedang Berjalan",
         "dlg_busy_close_msg": "Ada proses yang masih berjalan. Hentikan proses dan tutup aplikasi?",
         "err_row_prefix": "Baris {row}: {error}",
@@ -180,6 +189,53 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "update_dlg_busy_msg": (
             "Selesaikan atau batalkan proses transkrip/render yang sedang berjalan sebelum memperbarui."
         ),
+        # Live preview
+        "preview_title": "Pratinjau Gaya (Live Preview)",
+        "tooltip_preview_zoom": "Scroll untuk zoom, seret untuk geser, klik ganda atau klik tombol ini untuk reset ke 100%",
+        # Auto-tag keywords
+        "btn_auto_tag_keywords": "✨ Auto-Tandai Kata Kunci",
+        "tooltip_auto_tag_keywords": (
+            "Otomatis mengapit angka, tanggal, nama tempat/tokoh, dan kata dramatis dengan *bintang* "
+            "untuk gaya Newspaper Cutout (baris yang sudah memiliki * dilewati)."
+        ),
+        "status_auto_tag_done": "✨ {words} kata kunci ditandai pada {lines} baris subtitle.",
+        "status_auto_tag_none": "Tidak ada kata kunci baru yang ditandai (baris bertanda * dilewati).",
+        # Help dialog
+        "btn_help": "? Panduan",
+        "tooltip_help": "Buka panduan singkat gaya subtitle, font kustom, dan lokasi pengaturan",
+        "help_dlg_title": "Panduan AutoHardsub",
+        "help_header_title": "Panduan Cepat AutoHardsub",
+        "help_header_subtitle": "Tips memilih gaya subtitle, menandai kata kunci editorial, menambah font kustom, dan mengelola pengaturan.",
+        "help_sec1_title": "1. Panduan Gaya Subtitle (Presets)",
+        "help_sec1_body": (
+            "<ul style='margin:0; padding-left:18px;'>"
+            "<li><b>CapCut Pill (Active Word):</b> Teks putih tetap diam (1–2 baris) dengan kapsul warna (<i>Highlight Color</i>) yang berpindah mengikuti kata aktif.</li>"
+            "<li><b>Active Word Color (News/Doc):</b> Teks tebal dengan outline hitam tegas; hanya kata yang sedang diucapkan yang berubah ke warna <i>Highlight</i>.</li>"
+            "<li><b>Newspaper Cutout (Editorial):</b> Blok horizontal 1–3 kata bergaya guntingan koran investigatif — kotak kertas abu-abu terang dengan teks hitam sans-serif, serta kotak merah miring (±1.6°) ber-font serif putih untuk kata penting.</li>"
+            "<li><b>Preset Klasik (YouTube Clean, Reels Pop, Karaoke Wipe, Box Kontras):</b> Mendukung kustomisasi penuh warna teks, outline, dan kotak latar semi-transparan.</li>"
+            "</ul>"
+        ),
+        "help_sec2_title": "2. Tips Newspaper Cutout (*Kata Kunci*)",
+        "help_sec2_body": (
+            "Apit kata apa pun dengan tanda bintang seperti <b>*Baduy*</b> atau <b>*api*</b> di tabel editor untuk "
+            "memaksanya tampil dalam kotak merah miring ber-font serif.<br><br>"
+            "Gunakan tombol <b>✨ Auto-Tandai Kata Kunci</b> di atas tabel subtitle untuk menandai angka, tanggal/hari, "
+            "nama proper di tengah kalimat, dan kata dramatis secara otomatis. Baris yang sudah memiliki tanda <b>*</b> "
+            "akan dilewati agar suntingan manual Anda tetap aman."
+        ),
+        "help_sec3_title": "3. Menambah Font Kustom",
+        "help_sec3_body": (
+            "Salin file font berformat <b>.ttf</b> atau <b>.otf</b> ke folder berikut lalu mulai ulang AutoHardsub:<br>"
+            "<code style='color:#7dd3fc;'>{fonts_dir}</code><br><br>"
+            "Font kustom akan otomatis dimuat dan muncul di bagian paling atas daftar <b>Jenis Font</b>."
+        ),
+        "help_sec4_title": "4. Auto-Update & Lokasi Pengaturan",
+        "help_sec4_body": (
+            "Semua preferensi terakhir Anda (bahasa UI, preset, font, warna, margin vertikal, dan rasio pratinjau) "
+            "disimpan otomatis di luar folder aplikasi agar tidak pernah tertimpa saat pembaruan dari GitHub:<br>"
+            "<code style='color:#7dd3fc;'>{settings_dir}\\user_settings.json</code>"
+        ),
+        "help_btn_open_fonts": "Buka Folder Font (assets/fonts)",
     },
     "en": {
         # Window & Header
@@ -249,7 +305,7 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "chk_enable_bg_box": "Enable Text Background Box",
         "label_bg_box_opacity": "Box Opacity:",
         "tooltip_primary_color": "Choose the main subtitle text color",
-        "tooltip_highlight_color": "Choose the active word highlight color (for Active Word Color / CapCut Pill / Pop / Karaoke presets)",
+        "tooltip_highlight_color": "Choose the active word / emphasis box highlight color (for Active Word Color / CapCut Pill / Newspaper Cutout / Pop / Karaoke presets)",
         "tooltip_outline_color": "Choose the text outline stroke color",
         "tooltip_bg_box_color": "Choose the text background box color",
         "tooltip_bg_box_toggle": "Draw a background box behind subtitle text (ASS BorderStyle=3)",
@@ -273,6 +329,8 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "preset_capcut_pill_desc": "Rounded highlight pill tracks each active word smoothly underneath stationary white text (CapCut style).",
         "preset_active_word_color_name": "Active Word Color (News/Doc)",
         "preset_active_word_color_desc": "Stationary bold-outlined text where only the currently spoken word changes to the highlight color (News/Documentary style).",
+        "preset_newspaper_cutout_name": "Newspaper Cutout (Editorial)",
+        "preset_newspaper_cutout_desc": "Investigative newspaper cutout style (1–3 words): crisp white paper boxes with bold black sans-serif text and tilted crimson boxes with bold white serif text. Wrap words in *asterisks* for manual emphasis.",
         # Status messages
         "status_ready": "Ready. Select a video to get started.",
         "status_video_loaded": "Video loaded. Click '1. Generate Transcript' or add subtitles manually.",
@@ -301,9 +359,16 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "dlg_export_success_title": "Export Complete",
         "dlg_export_success_text": "Hardsub video has been created successfully!",
         "dlg_export_success_info": "File location:\n{path}",
+        "btn_open_file": "▶ Open File",
         "btn_open_folder": "Open Output Folder",
+        "btn_open_folder_short": "📂 Open Folder",
         "btn_close": "Close",
         "dlg_export_error_title": "Export Failed",
+        "export_dlg_title": "Export Hardsub Video",
+        "export_dlg_heading": "Exporting Hardsub Video",
+        "export_dlg_done_heading": "Export Complete!",
+        "export_dlg_done": "✓ Export Complete! Your hardsub video is ready.",
+        "export_dlg_cancelling": "Cancelling...",
         "dlg_busy_close_title": "Process Running",
         "dlg_busy_close_msg": "A process is still running. Stop it and close the application?",
         "err_row_prefix": "Row {row}: {error}",
@@ -350,6 +415,53 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "update_dlg_busy_msg": (
             "Please finish or cancel the active transcription/render task before updating."
         ),
+        # Live preview
+        "preview_title": "Live Style Preview",
+        "tooltip_preview_zoom": "Scroll to zoom, drag to pan, double-click or click this button to reset to 100%",
+        # Auto-tag keywords
+        "btn_auto_tag_keywords": "✨ Auto-Tag Keywords",
+        "tooltip_auto_tag_keywords": (
+            "Automatically wrap numbers, dates, proper nouns, and high-impact words in *asterisks* "
+            "for Newspaper Cutout style (lines already containing * are skipped)."
+        ),
+        "status_auto_tag_done": "✨ Tagged {words} keywords across {lines} subtitle lines.",
+        "status_auto_tag_none": "No new keywords were tagged (lines already containing * were skipped).",
+        # Help dialog
+        "btn_help": "? Help",
+        "tooltip_help": "Open quick guide for subtitle presets, custom fonts, and settings storage",
+        "help_dlg_title": "AutoHardsub Help",
+        "help_header_title": "AutoHardsub Quick Guide",
+        "help_header_subtitle": "Tips for subtitle presets, editorial keyword tagging, custom fonts, and persistent settings.",
+        "help_sec1_title": "1. Subtitle Style Guide (Presets)",
+        "help_sec1_body": (
+            "<ul style='margin:0; padding-left:18px;'>"
+            "<li><b>CapCut Pill (Active Word):</b> Stationary 1–2 line white text with a rounded highlight pill tracking the currently spoken word.</li>"
+            "<li><b>Active Word Color (News/Doc):</b> Bold outlined stationary text where only the active word switches to your <i>Highlight Color</i>.</li>"
+            "<li><b>Newspaper Cutout (Editorial):</b> Investigative 1–3 word horizontal blocks — crisp light-gray paper boxes with bold black sans-serif text, paired with slightly tilted (±1.6°) crimson boxes with bold white serif text for emphasized words.</li>"
+            "<li><b>Classic Presets (YouTube Clean, Reels Pop, Karaoke Wipe, Contrast Box):</b> Full control over font, colors, outline width, and semi-transparent background box.</li>"
+            "</ul>"
+        ),
+        "help_sec2_title": "2. Newspaper Cutout Tips (*Keywords*)",
+        "help_sec2_body": (
+            "Wrap any word in asterisks like <b>*Baduy*</b> or <b>*fire*</b> in the subtitle editor to force "
+            "the tilted red serif cutout box.<br><br>"
+            "Click <b>✨ Auto-Tag Keywords</b> above the subtitle table to automatically tag numbers, dates/days, "
+            "mid-sentence proper nouns, and dramatic news words. Lines that already contain <b>*</b> are skipped "
+            "so your manual tags stay untouched."
+        ),
+        "help_sec3_title": "3. Adding Custom Fonts",
+        "help_sec3_body": (
+            "Drop any <b>.ttf</b> or <b>.otf</b> font file into the folder below and restart AutoHardsub:<br>"
+            "<code style='color:#7dd3fc;'>{fonts_dir}</code><br><br>"
+            "Your custom fonts will automatically appear at the very top of the <b>Font Family</b> dropdown."
+        ),
+        "help_sec4_title": "4. Auto-Update & Settings Location",
+        "help_sec4_body": (
+            "Your last-used preferences (UI language, preset, font, colors, vertical margin, preview aspect, and AI model) "
+            "are saved safely outside the application folder so GitHub auto-updates never overwrite them:<br>"
+            "<code style='color:#7dd3fc;'>{settings_dir}\\user_settings.json</code>"
+        ),
+        "help_btn_open_fonts": "Open Fonts Folder (assets/fonts)",
     },
 }
 

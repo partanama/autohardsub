@@ -12,7 +12,7 @@ class SubtitlePreset:
     id: str
     name: str
     description: str
-    animation_mode: str  # "static", "word_pop", "karaoke_wipe", "box", "capcut_pill", "active_word_color"
+    animation_mode: str  # "static", "word_pop", "karaoke_wipe", "box", "capcut_pill", "active_word_color", "newspaper_cutout"
     font_name: str
     primary_colour: str
     secondary_colour: str
@@ -184,6 +184,31 @@ PRESETS: tuple[SubtitlePreset, ...] = (
         default_margin_v=140,
         primary_text_hex="#FFFFFF",
         highlight_hex="#FF8C1A",
+        outline_hex="#000000",
+        bg_box_hex="#000000",
+        bg_box_enabled=False,
+        bg_box_opacity=50,
+    ),
+    SubtitlePreset(
+        id="newspaper_cutout",
+        name="Newspaper Cutout (Editorial)",
+        description="Gaya guntingan koran investigatif (1–3 kata): kotak kertas putih lurus dengan teks hitam bold, dan kata penting dalam kotak merah miring dengan font serif putih. Gunakan *kata* untuk penekanan manual.",
+        animation_mode="newspaper_cutout",
+        font_name="Montserrat",
+        primary_colour="&H00111111",
+        secondary_colour="&H00111111",
+        outline_colour="&H00000000",
+        back_colour="&H80000000",
+        highlight_colour="&H00222A9E",
+        bold=-1,
+        border_style=1,
+        outline=0.0,
+        shadow=3.0,
+        alignment=2,
+        default_font_size=58,
+        default_margin_v=140,
+        primary_text_hex="#111111",
+        highlight_hex="#9E2A22",
         outline_hex="#000000",
         bg_box_hex="#000000",
         bg_box_enabled=False,

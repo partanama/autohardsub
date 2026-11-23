@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, QPointF, Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QCompleter,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -32,9 +33,10 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
-    QProgressBar,
     QProgressDialog,
     QPushButton,
+    QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QTableWidget,
@@ -46,6 +48,7 @@ from PySide6.QtWidgets import (
 from core.ass_engine import AssConfig
 from core.hw_detect import HardwareProfile, detect_hardware
 from core.i18n import SUPPORTED_LANGUAGES, normalize_lang, tr
+from core.keyword_tagger import auto_tag_line
 from core.media_probe import MediaProbeError, VideoInfo, probe_video
 from core.paths import get_binary_status, get_fonts_dir, get_models_dir
 from core.presets import PRESETS, SubtitlePreset, get_preset
@@ -55,11 +58,15 @@ from core.updater import (
     load_local_version,
     restart_application,
 )
+from core.user_settings import load_user_settings, save_user_settings
+from ui.export_dialog import ExportProgressDialog
+from ui.help_dialog import HelpDialog
+from ui.style_preview import StylePreviewWidget
 from workers.render_worker import RenderWorker
 from workers.transcribe_worker import TranscribeWorker
 
 _VIDEO_EXTENSIONS = {".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".ts", ".flv"}
-_FONT_EXTENSIONS = {".ttf", ".otf", ".ttc"}
+_FONT_EXTENSIONS = {".ttf", ".otf"}
 
 _AUDIO_LANGUAGE_CODES: tuple[tuple[str, str], ...] = (
     ("lang_auto", "auto"),
@@ -73,17 +80,25 @@ _MODEL_CODES: tuple[tuple[str, str], ...] = (
     ("model_large_v3", "large-v3"),
 )
 
-_COMMON_SYSTEM_FONTS: tuple[str, ...] = (
-    "Arial",
-    "Segoe UI",
+_CURATED_FONTS: tuple[str, ...] = (
+    "Montserrat",
+    "Poppins",
+    "Anton",
+    "Bebas Neue",
     "Impact",
-    "Verdana",
-    "Tahoma",
-    "Trebuchet MS",
-    "Calibri",
+    "Arial Black",
+    "Oswald",
+    "Roboto",
+    "Inter",
     "Georgia",
-    "Consolas",
+    "Times New Roman",
+    "Playfair Display",
+    "Trebuchet MS",
+    "Verdana",
+    "Courier New",
 )
+
+_LOADED_CUSTOM_FONTS: list[str] | None = None
 
 _CONFIDENCE_MODERATE_THRESHOLD = 0.65
 _CONFIDENCE_LOW_THRESHOLD = 0.45
@@ -143,12 +158,21 @@ def _contrast_text_color(hex_rgb: str) -> str:
     return "#0f172a" if luminance > 150 else "#f8fafc"
 
 
-def _discover_available_fonts() -> list[str]:
-    """Load bundled fonts from assets/fonts/ and merge with common system fonts."""
-    discovered: list[str] = []
+def load_bundled_fonts() -> list[str]:
+    """Scan assets/fonts/ (creating it if missing) and register .ttf/.otf fonts with Qt."""
+    global _LOADED_CUSTOM_FONTS
+    if _LOADED_CUSTOM_FONTS is not None:
+        return list(_LOADED_CUSTOM_FONTS)
+
+    custom_families: list[str] = []
     seen_lower: set[str] = set()
 
     fonts_dir = get_fonts_dir()
+    try:
+        fonts_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+
     if fonts_dir.is_dir():
         try:
             for entry in sorted(fonts_dir.iterdir(), key=lambda p: p.name.lower()):
@@ -158,20 +182,45 @@ def _discover_available_fonts() -> list[str]:
                         for family in QFontDatabase.applicationFontFamilies(font_id):
                             clean = family.strip()
                             if clean and clean.lower() not in seen_lower:
-                                discovered.append(clean)
+                                custom_families.append(clean)
                                 seen_lower.add(clean.lower())
         except OSError:
             pass
 
-    installed_lower = {fam.lower(): fam for fam in QFontDatabase.families()}
-    if "anton" in installed_lower and "anton" not in seen_lower:
-        discovered.append(installed_lower["anton"])
-        seen_lower.add("anton")
+    _LOADED_CUSTOM_FONTS = custom_families
+    return list(custom_families)
 
-    for family in _COMMON_SYSTEM_FONTS:
-        if family.lower() not in seen_lower:
+
+def _discover_available_fonts() -> list[str]:
+    """Return custom assets/fonts/ families, curated editorial fonts, and all system fonts."""
+    discovered: list[str] = []
+    seen_lower: set[str] = set()
+
+    # 1. Custom bundled fonts from assets/fonts/ at the very top
+    for family in load_bundled_fonts():
+        key = family.lower()
+        if key not in seen_lower:
             discovered.append(family)
-            seen_lower.add(family.lower())
+            seen_lower.add(key)
+
+    installed_families = [fam.strip() for fam in QFontDatabase.families() if fam.strip()]
+    installed_lower = {fam.lower(): fam for fam in installed_families}
+
+    # 2. Curated popular creator/editorial fonts (filtered to those installed/available)
+    for family in _CURATED_FONTS:
+        key = family.lower()
+        if key in seen_lower:
+            continue
+        if key in installed_lower:
+            discovered.append(installed_lower[key])
+            seen_lower.add(key)
+
+    # 3. All remaining installed Windows system fonts sorted alphabetically (deduplicated)
+    for family in sorted(installed_families, key=lambda fam: fam.lower()):
+        key = family.lower()
+        if key not in seen_lower:
+            discovered.append(family)
+            seen_lower.add(key)
 
     return discovered
 
@@ -217,6 +266,116 @@ class VideoDropZone(QFrame):
         event.ignore()
 
 
+class _ScrubMixin:
+    """Premiere-style horizontal click-and-drag scrubbing mixin for Qt spinboxes."""
+
+    _DRAG_THRESHOLD_PX: float = 3.0
+
+    def _init_scrubbing(self, sensitivity: float) -> None:
+        self._scrub_sensitivity: float = float(sensitivity)
+        self._press_active: bool = False
+        self._scrubbing: bool = False
+        self._had_focus_on_press: bool = False
+        self._press_global_pos: QPointF = QPointF(0.0, 0.0)
+        self._press_value: float = 0.0
+
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        le = self.lineEdit()
+        if le is not None:
+            le.setCursor(Qt.CursorShape.SizeHorCursor)
+            le.installEventFilter(self)
+
+    def _apply_scrub_delta(self, dx: float) -> None:
+        raise NotImplementedError
+
+    def _handle_line_edit_event(self, obj, event: QEvent) -> bool:
+        le = self.lineEdit()
+        if obj is not le or le is None or not self.isEnabled():
+            return False
+
+        etype = event.type()
+        if etype == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+            self._press_active = True
+            self._scrubbing = False
+            self._had_focus_on_press = le.hasFocus()
+            self._press_global_pos = event.globalPosition()
+            self._press_value = float(self.value())
+            return True
+
+        if etype == QEvent.Type.MouseButtonDblClick and event.button() == Qt.MouseButton.LeftButton:
+            self._press_active = False
+            self._scrubbing = False
+            le.setFocus(Qt.FocusReason.MouseFocusReason)
+            le.selectAll()
+            return True
+
+        if etype == QEvent.Type.MouseMove and self._press_active:
+            dx = event.globalPosition().x() - self._press_global_pos.x()
+            if not self._scrubbing and abs(dx) > self._DRAG_THRESHOLD_PX:
+                self._scrubbing = True
+                le.deselect()
+                le.clearFocus()
+            if self._scrubbing:
+                self._apply_scrub_delta(dx)
+                return True
+            return True
+
+        if etype == QEvent.Type.MouseButtonRelease and self._press_active and event.button() == Qt.MouseButton.LeftButton:
+            was_scrubbing = self._scrubbing
+            self._press_active = False
+            self._scrubbing = False
+            if not was_scrubbing:
+                le.setFocus(Qt.FocusReason.MouseFocusReason)
+                if self._had_focus_on_press:
+                    le.setCursorPosition(le.cursorPositionAt(event.position().toPoint()))
+                else:
+                    le.selectAll()
+            return True
+
+        return False
+
+
+class ScrubSpinBox(_ScrubMixin, QSpinBox):
+    """QSpinBox with horizontal click-and-drag scrubbing and normal click-to-type editing."""
+
+    def __init__(self, sensitivity: float = 0.25, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._init_scrubbing(sensitivity=sensitivity)
+
+    def _apply_scrub_delta(self, dx: float) -> None:
+        raw = self._press_value + (dx * self._scrub_sensitivity)
+        clamped = max(self.minimum(), min(self.maximum(), int(round(raw))))
+        if clamped != self.value():
+            self.setValue(clamped)
+
+    def eventFilter(self, obj, event: QEvent) -> bool:
+        if self._handle_line_edit_event(obj, event):
+            return True
+        return super().eventFilter(obj, event)
+
+
+class ScrubDoubleSpinBox(_ScrubMixin, QDoubleSpinBox):
+    """QDoubleSpinBox with horizontal click-and-drag scrubbing and normal click-to-type editing."""
+
+    def __init__(self, sensitivity: float = 0.05, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._init_scrubbing(sensitivity=sensitivity)
+
+    def _apply_scrub_delta(self, dx: float) -> None:
+        raw = self._press_value + (dx * self._scrub_sensitivity)
+        clamped = max(
+            self.minimum(),
+            min(self.maximum(), round(raw, self.decimals())),
+        )
+        if abs(clamped - self.value()) > 1e-9:
+            self.setValue(clamped)
+
+    def eventFilter(self, obj, event: QEvent) -> bool:
+        if self._handle_line_edit_event(obj, event):
+            return True
+        return super().eventFilter(obj, event)
+
+
 class MainWindow(QMainWindow):
     """Primary AutoHardsub desktop interface."""
 
@@ -238,8 +397,16 @@ class MainWindow(QMainWindow):
         self._update_check_worker: UpdateCheckWorker | None = None
         self._update_install_worker: UpdateInstallWorker | None = None
         self._update_progress_dialog: QProgressDialog | None = None
+        self._export_dialog: ExportProgressDialog | None = None
         self._is_busy = False
         self._updating_table = False
+        self._restoring_settings = False
+
+        # Debounced settings saver (writes to %LOCALAPPDATA%\AutoHardsub\user_settings.json)
+        self._save_settings_timer = QTimer(self)
+        self._save_settings_timer.setSingleShot(True)
+        self._save_settings_timer.setInterval(400)
+        self._save_settings_timer.timeout.connect(self._save_user_settings_now)
 
         # Live subtitle color state (RGB hex "#RRGGBB")
         self._primary_text_color: str = "#FFFFFF"
@@ -250,8 +417,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._apply_hardware_badge()
         self._check_missing_binaries()
-        self._on_preset_changed(0)
-        self.apply_language(self._lang)
+        self._restore_user_settings()
         self._update_action_states()
 
         # Silent post-launch update check (1.5s delay)
@@ -263,12 +429,12 @@ class MainWindow(QMainWindow):
     def _set_status_key(self, key: str, **kwargs) -> None:
         self._status_i18n_key = key
         self._status_i18n_kwargs = kwargs
-        self.status_label.setText(self._t(key, **kwargs))
+        self.statusBar().showMessage(self._t(key, **kwargs))
 
     def _set_raw_status(self, text: str) -> None:
         self._status_i18n_key = None
         self._status_i18n_kwargs = {}
-        self.status_label.setText(text)
+        self.statusBar().showMessage(text)
 
     def _build_ui(self) -> None:
         central = QWidget(self)
@@ -330,10 +496,22 @@ class MainWindow(QMainWindow):
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
 
+        self.help_btn = QPushButton()
+        self.help_btn.setObjectName("MiniButton")
+        self.help_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.help_btn.clicked.connect(self._on_open_help)
+        header_layout.addWidget(
+            self.help_btn,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+
         self.ui_lang_combo = QComboBox()
         self.ui_lang_combo.setObjectName("LangSwitcher")
+        self.ui_lang_combo.setMinimumWidth(95)
+        self.ui_lang_combo.setMaxVisibleItems(10)
         for label, code in SUPPORTED_LANGUAGES:
             self.ui_lang_combo.addItem(label, code)
+        self.ui_lang_combo.view().setMinimumWidth(150)
         self.ui_lang_combo.currentIndexChanged.connect(self._on_ui_language_changed)
         header_layout.addWidget(
             self.ui_lang_combo,
@@ -369,26 +547,32 @@ class MainWindow(QMainWindow):
         step1_layout.addWidget(self.step1_title_label)
 
         self.drop_zone = VideoDropZone(self._load_video)
-        self.drop_zone.setMinimumHeight(74)
+        self.drop_zone.setFixedHeight(48)
         drop_layout = QHBoxLayout(self.drop_zone)
-        drop_layout.setContentsMargins(16, 14, 16, 14)
-        drop_layout.setSpacing(12)
+        drop_layout.setContentsMargins(12, 6, 8, 6)
+        drop_layout.setSpacing(10)
 
-        video_text_col = QVBoxLayout()
-        video_text_col.setSpacing(4)
         self.video_name_label = QLabel()
         self.video_name_label.setObjectName("VideoNameLabel")
+        self.video_name_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        self.video_name_label.setMinimumWidth(0)
+
         self.video_meta_label = QLabel()
         self.video_meta_label.setObjectName("MutedLabel")
-        self.video_meta_label.setWordWrap(True)
-        video_text_col.addWidget(self.video_name_label)
-        video_text_col.addWidget(self.video_meta_label)
+        self.video_meta_label.setVisible(False)
 
         self.browse_video_btn = QPushButton()
         self.browse_video_btn.setObjectName("SecondaryButton")
+        self.browse_video_btn.setFixedHeight(32)
+        self.browse_video_btn.setStyleSheet(
+            "QPushButton#SecondaryButton { padding: 4px 12px; }"
+        )
         self.browse_video_btn.clicked.connect(self._on_browse_video)
 
-        drop_layout.addLayout(video_text_col, stretch=1)
+        drop_layout.addWidget(self.video_name_label, stretch=1)
+        drop_layout.addWidget(self.video_meta_label)
         drop_layout.addWidget(
             self.browse_video_btn, alignment=Qt.AlignmentFlag.AlignVCenter
         )
@@ -401,15 +585,23 @@ class MainWindow(QMainWindow):
         self.lang_combo = QComboBox()
         for key, code in _AUDIO_LANGUAGE_CODES:
             self.lang_combo.addItem(self._t(key), code)
+        self.lang_combo.currentIndexChanged.connect(self._schedule_save_settings)
 
         self.model_label = QLabel()
         self.model_combo = QComboBox()
         for key, code in _MODEL_CODES:
             self.model_combo.addItem(self._t(key), code)
+        self.model_combo.currentIndexChanged.connect(self._schedule_save_settings)
 
         self.transcribe_btn = QPushButton()
         self.transcribe_btn.setObjectName("ActionButton")
         self.transcribe_btn.clicked.connect(self._on_start_transcribe)
+
+        self.cancel_btn = QPushButton()
+        self.cancel_btn.setObjectName("DangerButton")
+        self.cancel_btn.setFixedHeight(34)
+        self.cancel_btn.setVisible(False)
+        self.cancel_btn.clicked.connect(self._on_cancel_worker)
 
         controls_row.addWidget(self.audio_lang_label)
         controls_row.addWidget(self.lang_combo, stretch=1)
@@ -418,6 +610,7 @@ class MainWindow(QMainWindow):
         controls_row.addWidget(self.model_combo, stretch=1)
         controls_row.addSpacing(8)
         controls_row.addWidget(self.transcribe_btn)
+        controls_row.addWidget(self.cancel_btn)
         step1_layout.addLayout(controls_row)
 
         left_col.addWidget(step1_card)
@@ -435,6 +628,11 @@ class MainWindow(QMainWindow):
         self.cue_count_label = QLabel()
         self.cue_count_label.setObjectName("MutedLabel")
 
+        self.auto_tag_btn = QPushButton()
+        self.auto_tag_btn.setObjectName("MiniButton")
+        self.auto_tag_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.auto_tag_btn.clicked.connect(self._on_auto_tag_keywords)
+
         self.add_row_btn = QPushButton()
         self.add_row_btn.setObjectName("MiniButton")
         self.add_row_btn.clicked.connect(self._on_add_row)
@@ -447,6 +645,7 @@ class MainWindow(QMainWindow):
         table_header.addSpacing(8)
         table_header.addWidget(self.cue_count_label)
         table_header.addStretch(1)
+        table_header.addWidget(self.auto_tag_btn)
         table_header.addWidget(self.add_row_btn)
         table_header.addWidget(self.remove_row_btn)
         step2_layout.addLayout(table_header)
@@ -462,7 +661,7 @@ class MainWindow(QMainWindow):
         self.cue_table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.cue_table.verticalHeader().setDefaultSectionSize(30)
         self.cue_table.verticalHeader().setVisible(False)
-        self.cue_table.itemSelectionChanged.connect(self._update_action_states)
+        self.cue_table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self.cue_table.itemChanged.connect(self._on_table_item_changed)
 
         header = self.cue_table.horizontalHeader()
@@ -489,6 +688,23 @@ class MainWindow(QMainWindow):
         self.step3_title_label.setObjectName("SectionTitle")
         step3_layout.addWidget(self.step3_title_label)
 
+        # 0. Real-Time Live Style Preview (always visible at top of Step 3)
+        self.style_preview = StylePreviewWidget(step3_card)
+        self.style_preview.aspect_changed.connect(self._on_preview_aspect_changed)
+        step3_layout.addWidget(self.style_preview)
+
+        # Scrollable styling controls container so preview + export footer stay visible at any window height
+        style_scroll = QScrollArea()
+        style_scroll.setWidgetResizable(True)
+        style_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        style_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        style_scroll.setStyleSheet("QScrollArea { background: transparent; border: none; }")
+        style_controls_widget = QWidget()
+        style_controls_widget.setStyleSheet("background: transparent;")
+        style_controls_layout = QVBoxLayout(style_controls_widget)
+        style_controls_layout.setContentsMargins(0, 0, 4, 0)
+        style_controls_layout.setSpacing(9)
+
         # 1. Preset Section
         preset_section = QVBoxLayout()
         preset_section.setSpacing(4)
@@ -498,14 +714,9 @@ class MainWindow(QMainWindow):
             self.preset_combo.addItem(preset.name, preset.id)
         self.preset_combo.currentIndexChanged.connect(self._on_preset_changed)
 
-        self.preset_desc_label = QLabel()
-        self.preset_desc_label.setObjectName("MutedLabel")
-        self.preset_desc_label.setWordWrap(True)
-
         preset_section.addWidget(self.preset_label)
         preset_section.addWidget(self.preset_combo)
-        preset_section.addWidget(self.preset_desc_label)
-        step3_layout.addLayout(preset_section)
+        style_controls_layout.addLayout(preset_section)
 
         # 2. Typography Section
         typo_section = QVBoxLayout()
@@ -517,6 +728,27 @@ class MainWindow(QMainWindow):
         self.font_family_combo = QComboBox()
         for font_name in _discover_available_fonts():
             self.font_family_combo.addItem(font_name, font_name)
+        self.font_family_combo.setEditable(True)
+        self.font_family_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        font_completer = QCompleter(self.font_family_combo.model(), self.font_family_combo)
+        font_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        font_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        font_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        font_completer.popup().setStyleSheet(
+            "QAbstractItemView {"
+            " background-color: #1e293b;"
+            " color: #f8fafc;"
+            " selection-background-color: #2563eb;"
+            " border: 1px solid #475569;"
+            "}"
+        )
+        self.font_family_combo.setCompleter(font_completer)
+        self.font_family_combo.currentIndexChanged.connect(self._on_style_control_changed)
+        self.font_family_combo.currentTextChanged.connect(self._on_style_control_changed)
+        if self.font_family_combo.lineEdit() is not None:
+            self.font_family_combo.lineEdit().editingFinished.connect(
+                self._normalize_font_family_selection
+            )
         font_family_group.addWidget(self.font_family_label)
         font_family_group.addWidget(self.font_family_combo)
         typo_section.addLayout(font_family_group)
@@ -527,20 +759,22 @@ class MainWindow(QMainWindow):
         font_size_col = QVBoxLayout()
         font_size_col.setSpacing(4)
         self.font_size_label = QLabel()
-        self.font_size_spin = QSpinBox()
+        self.font_size_spin = ScrubSpinBox(sensitivity=0.25)
         self.font_size_spin.setRange(16, 150)
         self.font_size_spin.setSuffix(" px")
+        self.font_size_spin.valueChanged.connect(self._on_style_control_changed)
         font_size_col.addWidget(self.font_size_label)
         font_size_col.addWidget(self.font_size_spin)
 
         outline_width_col = QVBoxLayout()
         outline_width_col.setSpacing(4)
         self.outline_width_label = QLabel()
-        self.outline_width_spin = QDoubleSpinBox()
+        self.outline_width_spin = ScrubDoubleSpinBox(sensitivity=0.05)
         self.outline_width_spin.setRange(0.0, 20.0)
         self.outline_width_spin.setSingleStep(0.5)
         self.outline_width_spin.setDecimals(1)
         self.outline_width_spin.setSuffix(" px")
+        self.outline_width_spin.valueChanged.connect(self._on_style_control_changed)
         outline_width_col.addWidget(self.outline_width_label)
         outline_width_col.addWidget(self.outline_width_spin)
 
@@ -548,7 +782,7 @@ class MainWindow(QMainWindow):
         size_outline_row.addLayout(outline_width_col, stretch=1)
         typo_section.addLayout(size_outline_row)
 
-        step3_layout.addLayout(typo_section)
+        style_controls_layout.addLayout(typo_section)
 
         # 3. Color Palette Grid (2x2 Grid) + Background Box Controls
         color_section = QVBoxLayout()
@@ -563,7 +797,7 @@ class MainWindow(QMainWindow):
         self.primary_color_label = QLabel()
         self.primary_color_btn = QPushButton()
         self.primary_color_btn.setObjectName("ColorSwatchButton")
-        self.primary_color_btn.setFixedHeight(32)
+        self.primary_color_btn.setFixedHeight(30)
         self.primary_color_btn.clicked.connect(lambda: self._pick_color("primary"))
 
         primary_cell = QVBoxLayout()
@@ -574,7 +808,7 @@ class MainWindow(QMainWindow):
         self.highlight_color_label = QLabel()
         self.highlight_color_btn = QPushButton()
         self.highlight_color_btn.setObjectName("ColorSwatchButton")
-        self.highlight_color_btn.setFixedHeight(32)
+        self.highlight_color_btn.setFixedHeight(30)
         self.highlight_color_btn.clicked.connect(lambda: self._pick_color("highlight"))
 
         highlight_cell = QVBoxLayout()
@@ -585,7 +819,7 @@ class MainWindow(QMainWindow):
         self.outline_color_label = QLabel()
         self.outline_color_btn = QPushButton()
         self.outline_color_btn.setObjectName("ColorSwatchButton")
-        self.outline_color_btn.setFixedHeight(32)
+        self.outline_color_btn.setFixedHeight(30)
         self.outline_color_btn.clicked.connect(lambda: self._pick_color("outline"))
 
         outline_cell = QVBoxLayout()
@@ -596,7 +830,7 @@ class MainWindow(QMainWindow):
         self.bg_box_color_label = QLabel()
         self.bg_box_color_btn = QPushButton()
         self.bg_box_color_btn.setObjectName("ColorSwatchButton")
-        self.bg_box_color_btn.setFixedHeight(32)
+        self.bg_box_color_btn.setFixedHeight(30)
         self.bg_box_color_btn.clicked.connect(lambda: self._pick_color("bg_box"))
 
         bg_color_cell = QVBoxLayout()
@@ -625,15 +859,13 @@ class MainWindow(QMainWindow):
         self.bg_opacity_value_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.bg_opacity_slider.valueChanged.connect(
-            lambda val: self.bg_opacity_value_label.setText(f"{val}%")
-        )
+        self.bg_opacity_slider.valueChanged.connect(self._on_bg_opacity_changed)
         bg_opacity_row.addWidget(self.bg_opacity_label)
         bg_opacity_row.addWidget(self.bg_opacity_slider, stretch=1)
         bg_opacity_row.addWidget(self.bg_opacity_value_label)
         color_section.addLayout(bg_opacity_row)
 
-        step3_layout.addLayout(color_section)
+        style_controls_layout.addLayout(color_section)
 
         # 4. Position Section
         margin_row = QHBoxLayout()
@@ -641,21 +873,21 @@ class MainWindow(QMainWindow):
         self.margin_label = QLabel()
         self.margin_v_slider = QSlider(Qt.Orientation.Horizontal)
         self.margin_v_slider.setRange(0, 960)
+        self.margin_v_slider.setValue(60)
         self.margin_v_value_label = QLabel("60 px")
         self.margin_v_value_label.setMinimumWidth(48)
         self.margin_v_value_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
-        self.margin_v_slider.valueChanged.connect(
-            lambda val: self.margin_v_value_label.setText(f"{val} px")
-        )
+        self.margin_v_slider.valueChanged.connect(self._on_margin_v_changed)
         margin_row.addWidget(self.margin_label)
         margin_row.addWidget(self.margin_v_slider, stretch=1)
         margin_row.addWidget(self.margin_v_value_label)
-        step3_layout.addLayout(margin_row)
+        style_controls_layout.addLayout(margin_row)
 
-        # Push export footer cleanly to the bottom of the right column
-        step3_layout.addStretch(1)
+        style_controls_layout.addStretch(1)
+        style_scroll.setWidget(style_controls_widget)
+        step3_layout.addWidget(style_scroll, stretch=1)
 
         # 5. Bottom Sticky Export Footer
         export_footer = QVBoxLayout()
@@ -683,34 +915,11 @@ class MainWindow(QMainWindow):
         output_group.addLayout(output_row)
         export_footer.addLayout(output_group)
 
-        cta_row = QHBoxLayout()
-        cta_row.setSpacing(8)
         self.export_btn = QPushButton()
         self.export_btn.setObjectName("PrimaryButton")
         self.export_btn.setFixedHeight(42)
         self.export_btn.clicked.connect(self._on_start_export)
-
-        self.cancel_btn = QPushButton()
-        self.cancel_btn.setObjectName("DangerButton")
-        self.cancel_btn.setFixedHeight(42)
-        self.cancel_btn.setVisible(False)
-        self.cancel_btn.clicked.connect(self._on_cancel_worker)
-
-        cta_row.addWidget(self.export_btn, stretch=1)
-        cta_row.addWidget(self.cancel_btn)
-        export_footer.addLayout(cta_row)
-
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
-        self.progress_bar.setFixedHeight(22)
-        self.progress_bar.setTextVisible(True)
-        export_footer.addWidget(self.progress_bar)
-
-        self.status_label = QLabel()
-        self.status_label.setObjectName("StatusLabel")
-        self.status_label.setWordWrap(True)
-        export_footer.addWidget(self.status_label)
+        export_footer.addWidget(self.export_btn)
 
         step3_layout.addLayout(export_footer)
 
@@ -720,6 +929,7 @@ class MainWindow(QMainWindow):
     def _on_ui_language_changed(self, _index: int) -> None:
         lang_code = str(self.ui_lang_combo.currentData() or "en")
         self.apply_language(lang_code)
+        self._schedule_save_settings()
 
     def apply_language(self, lang_code: str) -> None:
         """Dynamically switch all visible UI texts to the chosen language ('id' or 'en')."""
@@ -738,6 +948,8 @@ class MainWindow(QMainWindow):
         self.ui_lang_combo.setToolTip(self._t("ui_lang_tooltip"))
         self._refresh_update_button_label()
         self.check_update_btn.setToolTip(self._t("tooltip_check_update"))
+        self.help_btn.setText(self._t("btn_help"))
+        self.help_btn.setToolTip(self._t("tooltip_help"))
 
         self._apply_hardware_badge()
         self._check_missing_binaries()
@@ -760,6 +972,8 @@ class MainWindow(QMainWindow):
         # Step 2
         self.step2_title_label.setText(self._t("step2_title"))
         self._update_cue_count()
+        self.auto_tag_btn.setText(self._t("btn_auto_tag_keywords"))
+        self.auto_tag_btn.setToolTip(self._t("tooltip_auto_tag_keywords"))
         self.add_row_btn.setText(self._t("btn_add_row"))
         self.remove_row_btn.setText(self._t("btn_remove_row"))
         self.confidence_legend_label.setText(self._t("confidence_legend"))
@@ -770,11 +984,11 @@ class MainWindow(QMainWindow):
 
         # Step 3
         self.step3_title_label.setText(self._t("step3_title"))
+        self.style_preview.set_title(self._t("preview_title"))
+        self.style_preview.set_zoom_reset_tooltip(self._t("tooltip_preview_zoom"))
         self.preset_label.setText(self._t("label_preset"))
         for i, preset in enumerate(PRESETS):
             self.preset_combo.setItemText(i, self._t(f"preset_{preset.id}_name"))
-        current_preset = self._current_preset()
-        self.preset_desc_label.setText(self._t(f"preset_{current_preset.id}_desc"))
 
         self.font_family_label.setText(self._t("label_font_family"))
         self.font_size_label.setText(self._t("label_font_size"))
@@ -802,34 +1016,25 @@ class MainWindow(QMainWindow):
         self.export_btn.setText(self._t("btn_export"))
 
         if self._status_i18n_key:
-            self.status_label.setText(
+            self.statusBar().showMessage(
                 self._t(self._status_i18n_key, **self._status_i18n_kwargs)
             )
 
     def _refresh_video_labels(self) -> None:
         if self._video_info is None:
             self.video_name_label.setText(self._t("drop_prompt"))
-            self.video_meta_label.setText(self._t("drop_hint"))
+            self.video_name_label.setToolTip("")
+            self.video_meta_label.setText("")
+            self.video_meta_label.setVisible(False)
             return
 
         info = self._video_info
-        self.video_name_label.setText(Path(info.path).name)
+        filename = Path(info.path).name
         duration_text = format_timestamp(info.duration_seconds).rsplit(".", 1)[0]
-        if info.height > info.width:
-            orientation = self._t("orientation_vertical")
-        elif info.height == info.width:
-            orientation = self._t("orientation_square")
-        else:
-            orientation = self._t("orientation_horizontal")
-        self.video_meta_label.setText(
-            self._t(
-                "video_meta_format",
-                width=info.width,
-                height=info.height,
-                orientation=orientation,
-                duration=duration_text,
-            )
-        )
+        self.video_name_label.setText(filename)
+        self.video_name_label.setToolTip(info.path)
+        self.video_meta_label.setText(f"{info.width}×{info.height} • {duration_text}")
+        self.video_meta_label.setVisible(True)
 
     def _apply_hardware_badge(self) -> None:
         profile = self._hardware_profile
@@ -909,24 +1114,44 @@ class MainWindow(QMainWindow):
         self._update_swatch_button(self.bg_box_color_btn, self._bg_box_color)
 
     def _on_bg_box_toggled(self, checked: bool) -> None:
-        is_pill = self._current_preset().animation_mode == "capcut_pill"
-        controls_enabled = (not self._is_busy) and (not is_pill) and checked
+        is_custom_box = self._current_preset().animation_mode in (
+            "capcut_pill",
+            "newspaper_cutout",
+        )
+        controls_enabled = (not self._is_busy) and (not is_custom_box) and checked
         self.bg_box_color_btn.setEnabled(controls_enabled)
         self.bg_opacity_slider.setEnabled(controls_enabled)
-        self.outline_color_btn.setEnabled((not self._is_busy) and (not is_pill) and (not checked))
+        self.outline_color_btn.setEnabled(
+            (not self._is_busy) and (not is_custom_box) and (not checked)
+        )
+        self._on_style_control_changed()
 
     def _sync_preset_control_states(self) -> None:
         preset = self._current_preset()
-        is_pill = preset.animation_mode == "capcut_pill"
+        is_custom_box = preset.animation_mode in ("capcut_pill", "newspaper_cutout")
         uses_highlight = preset.animation_mode in (
             "word_pop",
             "karaoke_wipe",
             "capcut_pill",
             "active_word_color",
+            "newspaper_cutout",
         )
         self.highlight_color_btn.setEnabled((not self._is_busy) and uses_highlight)
-        self.outline_width_spin.setEnabled((not self._is_busy) and (not is_pill))
-        self.bg_box_checkbox.setEnabled((not self._is_busy) and (not is_pill))
+        self.outline_width_spin.setEnabled((not self._is_busy) and (not is_custom_box))
+        self.bg_box_checkbox.setEnabled((not self._is_busy) and (not is_custom_box))
+        if preset.animation_mode == "newspaper_cutout":
+            self.auto_tag_btn.setStyleSheet(
+                "QPushButton#MiniButton {"
+                " background-color: #7f1d1d; color: #fef2f2; border: 1px solid #ef4444;"
+                " padding: 5px 10px; font-size: 12px;"
+                "}"
+                "QPushButton#MiniButton:hover:!disabled { background-color: #991b1b; }"
+                "QPushButton#MiniButton:disabled {"
+                " background-color: #334155; color: #64748b; border: 1px solid #334155;"
+                "}"
+            )
+        else:
+            self.auto_tag_btn.setStyleSheet("")
         self._on_bg_box_toggled(self.bg_box_checkbox.isChecked())
 
     def _pick_color(self, target: str) -> None:
@@ -952,11 +1177,39 @@ class MainWindow(QMainWindow):
         elif target == "bg_box":
             self._bg_box_color = hex_val
         self._sync_color_swatches()
+        self._on_style_control_changed()
+
+    def _normalize_font_family_selection(self) -> None:
+        """Snap typed font text to a valid item or restore the active valid font."""
+        typed = self.font_family_combo.currentText().strip()
+        idx = (
+            self.font_family_combo.findText(typed, Qt.MatchFlag.MatchFixedString)
+            if typed
+            else -1
+        )
+        if idx >= 0:
+            self.font_family_combo.setCurrentIndex(idx)
+        elif self.font_family_combo.currentIndex() >= 0:
+            self.font_family_combo.setEditText(
+                self.font_family_combo.itemText(self.font_family_combo.currentIndex())
+            )
+
+    def _selected_font_name(self) -> str:
+        """Return the validated font family name currently chosen in the searchable combo box."""
+        typed = self.font_family_combo.currentText().strip()
+        if typed:
+            idx = self.font_family_combo.findText(typed, Qt.MatchFlag.MatchFixedString)
+            if idx >= 0:
+                return self.font_family_combo.itemText(idx)
+        data = self.font_family_combo.currentData()
+        if data:
+            return str(data)
+        return self._current_preset().font_name
 
     def _build_ass_config(self) -> AssConfig:
         """Assemble current custom UI styling overrides into an AssConfig instance."""
         return AssConfig(
-            font_name=str(self.font_family_combo.currentData() or self.font_family_combo.currentText()),
+            font_name=self._selected_font_name(),
             font_size=self.font_size_spin.value(),
             margin_v=self.margin_v_slider.value(),
             outline_width=round(self.outline_width_spin.value(), 1),
@@ -1017,19 +1270,19 @@ class MainWindow(QMainWindow):
         default_output = src.with_name(f"{src.stem}_hardsub.mp4")
         self.output_path_edit.setText(str(default_output))
 
-        max_margin = max(540, info.height // 2)
-        self.margin_v_slider.setRange(0, max_margin)
+        # Match live style preview aspect ratio to the loaded video's dimensions
+        self.style_preview.set_video_dimensions(info.width, info.height)
+
+        self.margin_v_slider.setRange(0, 960)
         current_preset = self._current_preset()
         recommended_margin = (
             current_preset.default_margin_v
             if info.is_vertical
-            else min(current_preset.default_margin_v, max(40, info.height // 8))
+            else min(current_preset.default_margin_v, 120)
         )
-        self.margin_v_slider.setValue(min(max_margin, recommended_margin))
+        self.margin_v_slider.setValue(min(960, max(0, recommended_margin)))
 
         self._set_status_key("status_video_loaded")
-        self.progress_bar.setRange(0, 100)
-        self.progress_bar.setValue(0)
         self._update_action_states()
 
     def _on_browse_output(self) -> None:
@@ -1051,7 +1304,6 @@ class MainWindow(QMainWindow):
 
     def _on_preset_changed(self, _index: int) -> None:
         preset = self._current_preset()
-        self.preset_desc_label.setText(self._t(f"preset_{preset.id}_desc"))
 
         # Sync font family, size, outline, margin
         font_idx = self.font_family_combo.findText(
@@ -1080,6 +1332,184 @@ class MainWindow(QMainWindow):
         self.bg_box_checkbox.setChecked(preset.bg_box_enabled)
         self.bg_opacity_slider.setValue(preset.bg_box_opacity)
         self._sync_preset_control_states()
+        self._on_style_control_changed()
+
+    def _on_bg_opacity_changed(self, val: int) -> None:
+        self.bg_opacity_value_label.setText(f"{val}%")
+        self._on_style_control_changed()
+
+    def _on_margin_v_changed(self, val: int) -> None:
+        self.margin_v_value_label.setText(f"{val} px")
+        self._on_style_control_changed()
+
+    def _on_preview_aspect_changed(self, _aspect: str) -> None:
+        self._schedule_save_settings()
+
+    def _on_style_control_changed(self, *_args) -> None:
+        if self._restoring_settings:
+            return
+        self._refresh_style_preview()
+        self._schedule_save_settings()
+
+    def _refresh_style_preview(self) -> None:
+        self.style_preview.set_style_state(
+            self._current_preset(), self._build_ass_config()
+        )
+
+    def _refresh_preview_sample_text(self) -> None:
+        selected_rows = sorted({idx.row() for idx in self.cue_table.selectedIndexes()})
+        sample_text = ""
+        if selected_rows:
+            item = self.cue_table.item(selected_rows[0], 2)
+            if item is not None:
+                sample_text = item.text().strip()
+        self.style_preview.set_sample_text(sample_text or None)
+
+    def _on_table_selection_changed(self) -> None:
+        self._update_action_states()
+        self._refresh_preview_sample_text()
+
+    def _on_auto_tag_keywords(self) -> None:
+        if self._is_busy or self.cue_table.rowCount() == 0:
+            return
+
+        total_words = 0
+        total_lines = 0
+
+        self._updating_table = True
+        try:
+            for row in range(self.cue_table.rowCount()):
+                item = self.cue_table.item(row, 2)
+                if item is None:
+                    continue
+                original = item.text()
+                updated, count = auto_tag_line(original)
+                if count > 0 and updated != original:
+                    item.setText(updated)
+                    total_words += count
+                    total_lines += 1
+        finally:
+            self._updating_table = False
+
+        self._refresh_preview_sample_text()
+        if total_words > 0:
+            self._set_status_key(
+                "status_auto_tag_done", words=total_words, lines=total_lines
+            )
+        else:
+            self._set_status_key("status_auto_tag_none")
+
+    def _on_open_help(self) -> None:
+        dialog = HelpDialog(lang=self._lang, parent=self)
+        dialog.exec()
+
+    def _collect_user_settings(self) -> dict[str, object]:
+        return {
+            "language": self._lang,
+            "subtitle_style": self._current_preset().id,
+            "font_family": self._selected_font_name(),
+            "font_size": self.font_size_spin.value(),
+            "outline_width": round(self.outline_width_spin.value(), 1),
+            "font_color": self._primary_text_color,
+            "highlight_color": self._highlight_color,
+            "outline_color": self._outline_color,
+            "bg_box_color": self._bg_box_color,
+            "enable_bg_box": self.bg_box_checkbox.isChecked(),
+            "box_opacity": self.bg_opacity_slider.value(),
+            "vertical_margin": self.margin_v_slider.value(),
+            "preview_aspect": self.style_preview.aspect(),
+            "whisper_model": str(self.model_combo.currentData() or "base"),
+            "audio_language": str(self.lang_combo.currentData() or "auto"),
+        }
+
+    def _schedule_save_settings(self, *_args) -> None:
+        if self._restoring_settings:
+            return
+        self._save_settings_timer.start()
+
+    def _save_user_settings_now(self) -> None:
+        if self._restoring_settings:
+            return
+        if self._save_settings_timer.isActive():
+            self._save_settings_timer.stop()
+        save_user_settings(self._collect_user_settings())
+
+    def _restore_user_settings(self) -> None:
+        saved = load_user_settings()
+        self._restoring_settings = True
+        try:
+            # 1. Select saved preset (or default 0) to initialize baseline defaults
+            preset_id = saved.get("subtitle_style")
+            preset_idx = (
+                self.preset_combo.findData(preset_id) if isinstance(preset_id, str) else -1
+            )
+            if preset_idx < 0:
+                preset_idx = 0
+            self.preset_combo.setCurrentIndex(preset_idx)
+            self._on_preset_changed(preset_idx)
+
+            # 2. Overlay saved custom styling preferences on top of preset defaults
+            if "font_family" in saved:
+                font_idx = self.font_family_combo.findText(
+                    str(saved["font_family"]), Qt.MatchFlag.MatchFixedString
+                )
+                if font_idx >= 0:
+                    self.font_family_combo.setCurrentIndex(font_idx)
+
+            if "font_size" in saved:
+                self.font_size_spin.setValue(int(saved["font_size"]))
+
+            if "outline_width" in saved:
+                self.outline_width_spin.setValue(float(saved["outline_width"]))
+
+            if "font_color" in saved:
+                self._primary_text_color = str(saved["font_color"]).upper()
+            if "highlight_color" in saved:
+                self._highlight_color = str(saved["highlight_color"]).upper()
+            if "outline_color" in saved:
+                self._outline_color = str(saved["outline_color"]).upper()
+            if "bg_box_color" in saved:
+                self._bg_box_color = str(saved["bg_box_color"]).upper()
+            self._sync_color_swatches()
+
+            if "enable_bg_box" in saved:
+                self.bg_box_checkbox.setChecked(bool(saved["enable_bg_box"]))
+
+            if "box_opacity" in saved:
+                val = int(saved["box_opacity"])
+                self.bg_opacity_slider.setValue(val)
+                self.bg_opacity_value_label.setText(f"{val}%")
+
+            if "vertical_margin" in saved:
+                margin = max(
+                    self.margin_v_slider.minimum(),
+                    min(self.margin_v_slider.maximum(), int(saved["vertical_margin"])),
+                )
+                self.margin_v_slider.setValue(margin)
+                self.margin_v_value_label.setText(f"{margin} px")
+
+            if "preview_aspect" in saved:
+                self.style_preview.set_aspect(str(saved["preview_aspect"]), emit_signal=False)
+
+            if "whisper_model" in saved:
+                m_idx = self.model_combo.findData(saved["whisper_model"])
+                if m_idx >= 0:
+                    self.model_combo.setCurrentIndex(m_idx)
+
+            if "audio_language" in saved:
+                a_idx = self.lang_combo.findData(saved["audio_language"])
+                if a_idx >= 0:
+                    self.lang_combo.setCurrentIndex(a_idx)
+
+            self._sync_preset_control_states()
+
+            if "language" in saved:
+                self._lang = normalize_lang(str(saved["language"]))
+            self.apply_language(self._lang)
+        finally:
+            self._restoring_settings = False
+
+        self._refresh_style_preview()
 
     def _apply_row_confidence_style(
         self,
@@ -1166,6 +1596,7 @@ class MainWindow(QMainWindow):
             self._apply_row_confidence_style(row, words, min_conf, reviewed=True)
         finally:
             self._updating_table = False
+        self._refresh_preview_sample_text()
 
     def _populate_cues_table(self, cues: list[dict]) -> None:
         self._updating_table = True
@@ -1184,6 +1615,7 @@ class MainWindow(QMainWindow):
             self._updating_table = False
         self._update_cue_count()
         self._update_action_states()
+        self._refresh_preview_sample_text()
 
     def _append_cue_row(
         self,
@@ -1305,7 +1737,7 @@ class MainWindow(QMainWindow):
             raise ValueError(self._t("err_empty_cues"))
         return cues
 
-    def _set_busy(self, busy: bool, indeterminate: bool = False) -> None:
+    def _set_busy(self, busy: bool, *, show_inline_cancel: bool = False) -> None:
         self._is_busy = busy
         self.drop_zone.setEnabled(not busy)
         self.browse_video_btn.setEnabled(not busy)
@@ -1321,13 +1753,8 @@ class MainWindow(QMainWindow):
         self._sync_preset_control_states()
         self.output_path_edit.setEnabled(not busy)
         self.browse_output_btn.setEnabled(not busy)
-        self.cancel_btn.setVisible(busy)
-        self.cancel_btn.setEnabled(busy)
-
-        if busy and indeterminate:
-            self.progress_bar.setRange(0, 0)
-        else:
-            self.progress_bar.setRange(0, 100)
+        self.cancel_btn.setVisible(busy and show_inline_cancel)
+        self.cancel_btn.setEnabled(busy and show_inline_cancel)
 
         self._update_action_states()
 
@@ -1345,6 +1772,7 @@ class MainWindow(QMainWindow):
 
         self.transcribe_btn.setEnabled((not self._is_busy) and has_video)
         self.export_btn.setEnabled((not self._is_busy) and has_video and has_cues)
+        self.auto_tag_btn.setEnabled((not self._is_busy) and has_cues)
         self.remove_row_btn.setEnabled((not self._is_busy) and has_selection)
         self.check_update_btn.setEnabled((not self._is_busy) and (not updating))
 
@@ -1355,7 +1783,7 @@ class MainWindow(QMainWindow):
         language = str(self.lang_combo.currentData() or "auto")
         model_name = str(self.model_combo.currentData() or "base")
 
-        self._set_busy(True, indeterminate=True)
+        self._set_busy(True, show_inline_cancel=True)
         self._set_status_key("status_transcribing", model=model_name)
 
         worker = TranscribeWorker(
@@ -1375,7 +1803,6 @@ class MainWindow(QMainWindow):
     def _on_transcribe_finished(self, cues: list) -> None:
         self._transcribe_worker = None
         self._set_busy(False)
-        self.progress_bar.setValue(100)
         self._populate_cues_table(cues)
 
         if cues:
@@ -1396,7 +1823,6 @@ class MainWindow(QMainWindow):
     def _on_transcribe_error(self, message: str) -> None:
         self._transcribe_worker = None
         self._set_busy(False)
-        self.progress_bar.setValue(0)
         self._set_status_key("status_transcribe_failed")
         QMessageBox.warning(self, self._t("dlg_transcribe_error_title"), message)
 
@@ -1427,9 +1853,19 @@ class MainWindow(QMainWindow):
         preset = self._current_preset()
         ass_config = self._build_ass_config()
 
-        self._set_busy(True, indeterminate=False)
-        self.progress_bar.setValue(0)
+        self._set_busy(True, show_inline_cancel=False)
         self._set_status_key("status_export_starting")
+
+        export_dlg = ExportProgressDialog(
+            encoder_name=self._hardware_profile.encoder_name,
+            output_filename=Path(output_path).name,
+            lang=self._lang,
+            parent=self,
+            output_path=output_path,
+        )
+        export_dlg.cancel_requested.connect(self._on_cancel_worker)
+        self._export_dialog = export_dlg
+        export_dlg.show()
 
         worker = RenderWorker(
             video_info=self._video_info,
@@ -1443,21 +1879,15 @@ class MainWindow(QMainWindow):
             ass_config=ass_config,
             parent=self,
         )
-        worker.progress_changed.connect(self.progress_bar.setValue)
-        worker.status_changed.connect(self._set_raw_status)
+        worker.progress_changed.connect(export_dlg.set_progress)
+        worker.status_changed.connect(export_dlg.set_status_text)
         worker.finished_success.connect(self._on_render_finished)
         worker.error_occurred.connect(self._on_render_error)
         worker.finished.connect(worker.deleteLater)
         self._render_worker = worker
         worker.start()
 
-    def _on_render_finished(self, output_path: str) -> None:
-        self._render_worker = None
-        self._set_busy(False)
-        self.progress_bar.setValue(100)
-        norm_output = os.path.normpath(str(output_path))
-        self._set_status_key("status_export_done", filename=Path(norm_output).name)
-
+    def _show_export_success_dialog(self, norm_output: str) -> None:
         dialog = QMessageBox(self)
         dialog.setIcon(QMessageBox.Icon.Information)
         dialog.setWindowTitle(self._t("dlg_export_success_title"))
@@ -1472,10 +1902,28 @@ class MainWindow(QMainWindow):
         if dialog.clickedButton() is open_folder_btn:
             self._open_output_folder(norm_output)
 
+    def _on_render_finished(self, output_path: str) -> None:
+        self._render_worker = None
+        self._set_busy(False)
+        norm_output = os.path.normpath(str(output_path))
+        self._set_status_key("status_export_done", filename=Path(norm_output).name)
+
+        dlg = self._export_dialog
+        self._export_dialog = None
+        if dlg is not None:
+            dlg.finished.connect(dlg.deleteLater)
+            dlg.mark_completed(norm_output)
+        else:
+            self._show_export_success_dialog(norm_output)
+
     def _on_render_error(self, message: str) -> None:
         self._render_worker = None
         self._set_busy(False)
-        self.progress_bar.setValue(0)
+        dlg = self._export_dialog
+        self._export_dialog = None
+        if dlg is not None:
+            dlg.mark_failed()
+            dlg.deleteLater()
         self._set_status_key("status_export_failed")
         QMessageBox.warning(self, self._t("dlg_export_error_title"), message)
 
@@ -1709,4 +2157,6 @@ class MainWindow(QMainWindow):
                 return
             active_worker.cancel()
             active_worker.wait(3000)
+
+        self._save_user_settings_now()
         super().closeEvent(event)

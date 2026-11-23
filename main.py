@@ -7,7 +7,7 @@ import sys
 
 from PySide6.QtWidgets import QApplication
 
-from ui.main_window import MainWindow
+from ui.main_window import MainWindow, load_bundled_fonts
 
 DARK_SLATE_QSS = """
 QWidget {
@@ -113,17 +113,32 @@ QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QLineEdit:focus {
 }
 
 QComboBox#LangSwitcher {
-    min-width: 58px;
-    max-width: 72px;
+    min-width: 95px;
     font-weight: 600;
-    padding: 4px 8px;
+    padding: 5px 10px;
 }
 
 QComboBox QAbstractItemView {
     background-color: #1e293b;
     color: #f8fafc;
     selection-background-color: #2563eb;
+    selection-color: #ffffff;
     border: 1px solid #475569;
+    padding: 4px;
+    outline: 0px;
+}
+
+QComboBox QAbstractItemView::item {
+    min-height: 28px;
+    padding: 4px 10px;
+}
+
+QStatusBar {
+    background-color: #0b1220;
+    color: #94a3b8;
+    border-top: 1px solid #1e293b;
+    font-size: 11px;
+    padding: 2px 8px;
 }
 
 QCheckBox {
@@ -288,6 +303,7 @@ def main() -> int:
     app.setApplicationName("AutoHardsub")
     app.setStyle("Fusion")
     app.setStyleSheet(DARK_SLATE_QSS)
+    load_bundled_fonts()
 
     window = MainWindow()
     window.show()

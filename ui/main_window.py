@@ -163,6 +163,11 @@ def _discover_available_fonts() -> list[str]:
         except OSError:
             pass
 
+    installed_lower = {fam.lower(): fam for fam in QFontDatabase.families()}
+    if "anton" in installed_lower and "anton" not in seen_lower:
+        discovered.append(installed_lower["anton"])
+        seen_lower.add("anton")
+
     for family in _COMMON_SYSTEM_FONTS:
         if family.lower() not in seen_lower:
             discovered.append(family)
@@ -635,7 +640,7 @@ class MainWindow(QMainWindow):
         margin_row.setSpacing(8)
         self.margin_label = QLabel()
         self.margin_v_slider = QSlider(Qt.Orientation.Horizontal)
-        self.margin_v_slider.setRange(10, 500)
+        self.margin_v_slider.setRange(0, 960)
         self.margin_v_value_label = QLabel("60 px")
         self.margin_v_value_label.setMinimumWidth(48)
         self.margin_v_value_label.setAlignment(
@@ -904,10 +909,25 @@ class MainWindow(QMainWindow):
         self._update_swatch_button(self.bg_box_color_btn, self._bg_box_color)
 
     def _on_bg_box_toggled(self, checked: bool) -> None:
-        controls_enabled = (not self._is_busy) and checked
+        is_pill = self._current_preset().animation_mode == "capcut_pill"
+        controls_enabled = (not self._is_busy) and (not is_pill) and checked
         self.bg_box_color_btn.setEnabled(controls_enabled)
         self.bg_opacity_slider.setEnabled(controls_enabled)
-        self.outline_color_btn.setEnabled((not self._is_busy) and (not checked))
+        self.outline_color_btn.setEnabled((not self._is_busy) and (not is_pill) and (not checked))
+
+    def _sync_preset_control_states(self) -> None:
+        preset = self._current_preset()
+        is_pill = preset.animation_mode == "capcut_pill"
+        uses_highlight = preset.animation_mode in (
+            "word_pop",
+            "karaoke_wipe",
+            "capcut_pill",
+            "active_word_color",
+        )
+        self.highlight_color_btn.setEnabled((not self._is_busy) and uses_highlight)
+        self.outline_width_spin.setEnabled((not self._is_busy) and (not is_pill))
+        self.bg_box_checkbox.setEnabled((not self._is_busy) and (not is_pill))
+        self._on_bg_box_toggled(self.bg_box_checkbox.isChecked())
 
     def _pick_color(self, target: str) -> None:
         color_map = {
@@ -997,8 +1017,8 @@ class MainWindow(QMainWindow):
         default_output = src.with_name(f"{src.stem}_hardsub.mp4")
         self.output_path_edit.setText(str(default_output))
 
-        max_margin = max(200, info.height // 2)
-        self.margin_v_slider.setRange(10, max_margin)
+        max_margin = max(540, info.height // 2)
+        self.margin_v_slider.setRange(0, max_margin)
         current_preset = self._current_preset()
         recommended_margin = (
             current_preset.default_margin_v
@@ -1059,7 +1079,7 @@ class MainWindow(QMainWindow):
 
         self.bg_box_checkbox.setChecked(preset.bg_box_enabled)
         self.bg_opacity_slider.setValue(preset.bg_box_opacity)
-        self._on_bg_box_toggled(preset.bg_box_enabled)
+        self._sync_preset_control_states()
 
     def _apply_row_confidence_style(
         self,
@@ -1296,12 +1316,9 @@ class MainWindow(QMainWindow):
         self.preset_combo.setEnabled(not busy)
         self.font_family_combo.setEnabled(not busy)
         self.font_size_spin.setEnabled(not busy)
-        self.outline_width_spin.setEnabled(not busy)
         self.margin_v_slider.setEnabled(not busy)
         self.primary_color_btn.setEnabled(not busy)
-        self.highlight_color_btn.setEnabled(not busy)
-        self.bg_box_checkbox.setEnabled(not busy)
-        self._on_bg_box_toggled(self.bg_box_checkbox.isChecked())
+        self._sync_preset_control_states()
         self.output_path_edit.setEnabled(not busy)
         self.browse_output_btn.setEnabled(not busy)
         self.cancel_btn.setVisible(busy)

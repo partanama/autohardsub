@@ -102,6 +102,29 @@ def _flush_bpe_word(
     }
 
 
+def bridge_word_gaps(words: list[dict], max_gap_sec: float = 0.15) -> list[dict]:
+    """Bridge short inter-word gaps (< 150 ms) so active-word pills transition without flicker."""
+    if len(words) < 2:
+        return words
+    for idx in range(len(words) - 1):
+        curr = words[idx]
+        nxt = words[idx + 1]
+        curr_start = float(curr["start"])
+        curr_end = float(curr["end"])
+        next_start = float(nxt["start"])
+        gap = next_start - curr_end
+        if 0.0 < gap < max_gap_sec:
+            curr["end"] = next_start
+        elif gap < 0.0:
+            clamped_end = max(curr_start + 0.01, next_start)
+            curr["end"] = clamped_end
+            if float(nxt["start"]) < clamped_end:
+                nxt["start"] = clamped_end
+                if float(nxt["end"]) < clamped_end:
+                    nxt["end"] = clamped_end
+    return words
+
+
 def parse_whisper_ojf_json(payload: dict) -> list[dict]:
     """Parse whisper-cli ``-ojf`` JSON output into cues with merged whole-word timings."""
     raw_segments = payload.get("transcription")
@@ -158,6 +181,8 @@ def parse_whisper_ojf_json(payload: dict) -> list[dict]:
                 flushed = _flush_bpe_word(current_tokens, cursor)
                 if flushed is not None:
                     words.append(flushed)
+
+            bridge_word_gaps(words, max_gap_sec=0.15)
 
         if words:
             cue_text = " ".join(w["word"] for w in words)

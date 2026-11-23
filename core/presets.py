@@ -12,7 +12,7 @@ class SubtitlePreset:
     id: str
     name: str
     description: str
-    animation_mode: str  # "static", "word_pop", "karaoke_wipe", "box"
+    animation_mode: str  # "static", "word_pop", "karaoke_wipe", "box", "capcut_pill", "active_word_color"
     font_name: str
     primary_colour: str
     secondary_colour: str
@@ -137,6 +137,56 @@ PRESETS: tuple[SubtitlePreset, ...] = (
         outline_hex="#000000",
         bg_box_hex="#000000",
         bg_box_enabled=True,
+        bg_box_opacity=50,
+    ),
+    SubtitlePreset(
+        id="capcut_pill",
+        name="CapCut Pill (Active Word)",
+        description="Kotak kapsul berwarna mengikuti kata aktif secara halus dengan teks putih tetap diam (gaya CapCut).",
+        animation_mode="capcut_pill",
+        font_name="Montserrat",
+        primary_colour="&H00FFFFFF",
+        secondary_colour="&H00FFFFFF",
+        outline_colour="&H00000000",
+        back_colour="&H80000000",
+        highlight_colour="&H00F6006D",
+        bold=-1,
+        border_style=1,
+        outline=0.0,
+        shadow=2.0,
+        alignment=2,
+        default_font_size=58,
+        default_margin_v=140,
+        primary_text_hex="#FFFFFF",
+        highlight_hex="#6D00F6",
+        outline_hex="#000000",
+        bg_box_hex="#000000",
+        bg_box_enabled=False,
+        bg_box_opacity=50,
+    ),
+    SubtitlePreset(
+        id="active_word_color",
+        name="Active Word Color (News/Doc)",
+        description="Semua kata tetap diam dengan outline hitam tegas, sementara kata yang sedang diucapkan berubah warna highlight (gaya Berita/Dokumenter).",
+        animation_mode="active_word_color",
+        font_name="Montserrat",
+        primary_colour="&H00FFFFFF",
+        secondary_colour="&H00FFFFFF",
+        outline_colour="&H00000000",
+        back_colour="&H80000000",
+        highlight_colour="&H001A8CFF",
+        bold=-1,
+        border_style=1,
+        outline=3.5,
+        shadow=1.5,
+        alignment=2,
+        default_font_size=58,
+        default_margin_v=140,
+        primary_text_hex="#FFFFFF",
+        highlight_hex="#FF8C1A",
+        outline_hex="#000000",
+        bg_box_hex="#000000",
+        bg_box_enabled=False,
         bg_box_opacity=50,
     ),
 )

@@ -1,7 +1,7 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "codename": "Jemboed Kecelup Santen",
-  "changelog": "Rilis perdana: Auto transkrip GPU + Burn-in subtitle ASS.",
+  "changelog": "tambah style.",
   "github_owner": "partanama",
   "github_repo": "autohardsub",
   "github_branch": "main"

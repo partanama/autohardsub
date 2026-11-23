@@ -135,6 +135,47 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "err_row_prefix": "Baris {row}: {error}",
         "err_row_end_before_start": "Baris {row}: Waktu selesai harus lebih besar dari waktu mulai.",
         "err_empty_cues": "Daftar subtitle masih kosong. Buat transkrip atau tambah baris terlebih dahulu.",
+        # Auto-updater
+        "btn_check_update": "Cek Update",
+        "btn_checking_update": "Mengecek...",
+        "tooltip_check_update": "Periksa pembaruan aplikasi dari GitHub",
+        "update_dlg_available_title": "Pembaruan Tersedia",
+        "update_dlg_available_text": 'Versi baru AutoHardsub tersedia: v{version} ("{codename}")',
+        "update_dlg_available_info": (
+            "Versi saat ini: v{local_version}\n\n"
+            "Catatan Perubahan:\n{changelog}\n\n"
+            "Apakah Anda ingin memperbarui sekarang?"
+        ),
+        "update_no_changelog": "Tidak ada catatan perubahan.",
+        "btn_update_now": "Update Sekarang",
+        "btn_update_later": "Nanti",
+        "update_dlg_uptodate_title": "Aplikasi Sudah Terbaru",
+        "update_dlg_uptodate_msg": (
+            'Anda sudah menggunakan versi terbaru AutoHardsub (v{version} — "{codename}").'
+        ),
+        "update_dlg_check_error_title": "Gagal Memeriksa Update",
+        "update_dlg_check_error_msg": (
+            "Tidak dapat terhubung ke GitHub untuk memeriksa pembaruan.\n\nDetail: {error}"
+        ),
+        "update_progress_title": "Memperbarui AutoHardsub",
+        "update_status_backup": "Membuat cadangan file ke _backup/...",
+        "update_status_downloading": "Mengunduh pembaruan dari GitHub...",
+        "update_status_extracting": "Mengekstrak dan menerapkan file baru...",
+        "update_status_pip": "Memasang dependensi baru (pip)...",
+        "update_status_done": "Pembaruan selesai! Memulai ulang aplikasi...",
+        "update_dlg_success_title": "Pembaruan Berhasil",
+        "update_dlg_success_msg": (
+            'AutoHardsub telah diperbarui ke v{version} ("{codename}").\n'
+            "Aplikasi akan dimulai ulang sekarang."
+        ),
+        "update_dlg_failed_title": "Pembaruan Gagal",
+        "update_dlg_failed_msg": (
+            "Pembaruan gagal dan file sebelumnya telah dipulihkan otomatis dari _backup/.\n\n"
+            "Detail: {error}"
+        ),
+        "update_dlg_busy_msg": (
+            "Selesaikan atau batalkan proses transkrip/render yang sedang berjalan sebelum memperbarui."
+        ),
     },
     "en": {
         # Window & Header
@@ -260,6 +301,47 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "err_row_prefix": "Row {row}: {error}",
         "err_row_end_before_start": "Row {row}: End time must be greater than start time.",
         "err_empty_cues": "Subtitle list is empty. Generate a transcript or add rows first.",
+        # Auto-updater
+        "btn_check_update": "Check Updates",
+        "btn_checking_update": "Checking...",
+        "tooltip_check_update": "Check for application updates from GitHub",
+        "update_dlg_available_title": "Update Available",
+        "update_dlg_available_text": 'A new version of AutoHardsub is available: v{version} ("{codename}")',
+        "update_dlg_available_info": (
+            "Current version: v{local_version}\n\n"
+            "Changelog:\n{changelog}\n\n"
+            "Would you like to update now?"
+        ),
+        "update_no_changelog": "No changelog provided.",
+        "btn_update_now": "Update Now",
+        "btn_update_later": "Later",
+        "update_dlg_uptodate_title": "Up to Date",
+        "update_dlg_uptodate_msg": (
+            'You are already running the latest version of AutoHardsub (v{version} — "{codename}").'
+        ),
+        "update_dlg_check_error_title": "Update Check Failed",
+        "update_dlg_check_error_msg": (
+            "Could not reach GitHub to check for updates.\n\nDetails: {error}"
+        ),
+        "update_progress_title": "Updating AutoHardsub",
+        "update_status_backup": "Backing up existing files to _backup/...",
+        "update_status_downloading": "Downloading update from GitHub...",
+        "update_status_extracting": "Extracting and applying updated files...",
+        "update_status_pip": "Installing updated dependencies (pip)...",
+        "update_status_done": "Update complete! Restarting application...",
+        "update_dlg_success_title": "Update Complete",
+        "update_dlg_success_msg": (
+            'AutoHardsub has been updated to v{version} ("{codename}").\n'
+            "The application will restart now."
+        ),
+        "update_dlg_failed_title": "Update Failed",
+        "update_dlg_failed_msg": (
+            "The update failed and your previous files were automatically restored from _backup/.\n\n"
+            "Details: {error}"
+        ),
+        "update_dlg_busy_msg": (
+            "Please finish or cancel the active transcription/render task before updating."
+        ),
     },
 }
 

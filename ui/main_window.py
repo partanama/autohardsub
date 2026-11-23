@@ -7,7 +7,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -18,6 +18,7 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -32,6 +33,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -47,6 +49,12 @@ from core.i18n import SUPPORTED_LANGUAGES, normalize_lang, tr
 from core.media_probe import MediaProbeError, VideoInfo, probe_video
 from core.paths import get_binary_status, get_fonts_dir, get_models_dir
 from core.presets import PRESETS, SubtitlePreset, get_preset
+from core.updater import (
+    UpdateCheckWorker,
+    UpdateInstallWorker,
+    load_local_version,
+    restart_application,
+)
 from workers.render_worker import RenderWorker
 from workers.transcribe_worker import TranscribeWorker
 
@@ -218,9 +226,13 @@ class MainWindow(QMainWindow):
         self.setAcceptDrops(True)
 
         self._video_info: VideoInfo | None = None
+        self._version_info: dict[str, str] = load_local_version()
         self._hardware_profile: HardwareProfile = detect_hardware()
         self._transcribe_worker: TranscribeWorker | None = None
         self._render_worker: RenderWorker | None = None
+        self._update_check_worker: UpdateCheckWorker | None = None
+        self._update_install_worker: UpdateInstallWorker | None = None
+        self._update_progress_dialog: QProgressDialog | None = None
         self._is_busy = False
         self._updating_table = False
 
@@ -236,6 +248,9 @@ class MainWindow(QMainWindow):
         self._on_preset_changed(0)
         self.apply_language(self._lang)
         self._update_action_states()
+
+        # Silent post-launch update check (1.5s delay)
+        QTimer.singleShot(1500, self._start_silent_update_check)
 
     def _t(self, key: str, **kwargs) -> str:
         return tr(self._lang, key, **kwargs)
@@ -271,7 +286,11 @@ class MainWindow(QMainWindow):
         self.app_title_label = QLabel()
         self.app_title_label.setObjectName("AppTitle")
 
-        self.build_version_label = QLabel('Build Version : "Jemboed Kecelup Santen"')
+        codename = self._version_info.get("codename", "Jemboed Kecelup Santen")
+        version = self._version_info.get("version", "1.0.0")
+        self.build_version_label = QLabel(
+            f'Build Version : "{codename}" (v{version})'
+        )
         self.build_version_label.setObjectName("BuildVersionLabel")
         self.build_version_label.setStyleSheet(
             "font-size: 11px; font-style: italic; color: #94A3B8; margin-left: 10px;"
@@ -294,6 +313,15 @@ class MainWindow(QMainWindow):
         self.hw_badge_label.setObjectName("HardwareBadge")
         header_layout.addWidget(
             self.hw_badge_label,
+            alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+        )
+
+        self.check_update_btn = QPushButton()
+        self.check_update_btn.setObjectName("MiniButton")
+        self.check_update_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.check_update_btn.clicked.connect(self._on_check_update_clicked)
+        header_layout.addWidget(
+            self.check_update_btn,
             alignment=Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
         )
 
@@ -703,6 +731,8 @@ class MainWindow(QMainWindow):
         self.app_title_label.setText(self._t("app_title"))
         self.app_subtitle_label.setText(self._t("app_subtitle"))
         self.ui_lang_combo.setToolTip(self._t("ui_lang_tooltip"))
+        self._refresh_update_button_label()
+        self.check_update_btn.setToolTip(self._t("tooltip_check_update"))
 
         self._apply_hardware_badge()
         self._check_missing_binaries()
@@ -1288,10 +1318,18 @@ class MainWindow(QMainWindow):
         has_video = self._video_info is not None
         has_cues = self.cue_table.rowCount() > 0
         has_selection = bool(self.cue_table.selectedIndexes())
+        updating = (
+            self._update_check_worker is not None
+            and self._update_check_worker.isRunning()
+        ) or (
+            self._update_install_worker is not None
+            and self._update_install_worker.isRunning()
+        )
 
         self.transcribe_btn.setEnabled((not self._is_busy) and has_video)
         self.export_btn.setEnabled((not self._is_busy) and has_video and has_cues)
         self.remove_row_btn.setEnabled((not self._is_busy) and has_selection)
+        self.check_update_btn.setEnabled((not self._is_busy) and (not updating))
 
     def _on_start_transcribe(self) -> None:
         if self._video_info is None or self._is_busy:
@@ -1443,7 +1481,203 @@ class MainWindow(QMainWindow):
         parent_dir = target.parent.resolve() if target.parent.exists() else Path.home().resolve()
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(parent_dir)))
 
+    def _refresh_update_button_label(self) -> None:
+        checking = (
+            self._update_check_worker is not None
+            and self._update_check_worker.isRunning()
+            and not self._update_check_worker.is_silent
+        )
+        key = "btn_checking_update" if checking else "btn_check_update"
+        self.check_update_btn.setText(self._t(key))
+
+    def _start_silent_update_check(self) -> None:
+        self._start_update_check(silent=True)
+
+    def _on_check_update_clicked(self) -> None:
+        self._start_update_check(silent=False)
+
+    def _start_update_check(self, *, silent: bool) -> None:
+        if (
+            self._update_check_worker is not None
+            and self._update_check_worker.isRunning()
+        ):
+            return
+        if (
+            self._update_install_worker is not None
+            and self._update_install_worker.isRunning()
+        ):
+            return
+
+        worker = UpdateCheckWorker(silent=silent, timeout=5.0, parent=self)
+        worker.update_available.connect(self._on_update_available)
+        worker.up_to_date.connect(self._on_update_up_to_date)
+        worker.check_failed.connect(self._on_update_check_failed)
+        worker.finished.connect(self._on_update_check_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._update_check_worker = worker
+        self._refresh_update_button_label()
+        self._update_action_states()
+        worker.start()
+
+    def _on_update_check_finished(self) -> None:
+        self._update_check_worker = None
+        self._refresh_update_button_label()
+        self._update_action_states()
+
+    def _on_update_available(self, remote_info: dict) -> None:
+        new_version = str(remote_info.get("version", ""))
+        codename = str(remote_info.get("codename", ""))
+        local_version = str(
+            remote_info.get("local_version", self._version_info.get("version", "1.0.0"))
+        )
+        changelog = str(remote_info.get("changelog", "")).strip() or self._t(
+            "update_no_changelog"
+        )
+
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Information)
+        dialog.setWindowTitle(self._t("update_dlg_available_title"))
+        dialog.setText(
+            self._t(
+                "update_dlg_available_text",
+                version=new_version,
+                codename=codename,
+            )
+        )
+        dialog.setInformativeText(
+            self._t(
+                "update_dlg_available_info",
+                local_version=local_version,
+                changelog=changelog,
+            )
+        )
+        update_now_btn = dialog.addButton(
+            self._t("btn_update_now"), QMessageBox.ButtonRole.AcceptRole
+        )
+        dialog.addButton(self._t("btn_update_later"), QMessageBox.ButtonRole.RejectRole)
+        dialog.exec()
+
+        if dialog.clickedButton() is update_now_btn:
+            if self._is_busy:
+                QMessageBox.information(
+                    self,
+                    self._t("update_dlg_available_title"),
+                    self._t("update_dlg_busy_msg"),
+                )
+                return
+            self._start_update_install(remote_info)
+
+    def _on_update_up_to_date(self, remote_info: dict) -> None:
+        if remote_info.get("silent"):
+            return
+        local_version = self._version_info.get("version", "1.0.0")
+        codename = self._version_info.get("codename", "")
+        QMessageBox.information(
+            self,
+            self._t("update_dlg_uptodate_title"),
+            self._t(
+                "update_dlg_uptodate_msg",
+                version=local_version,
+                codename=codename,
+            ),
+        )
+
+    def _on_update_check_failed(self, error_msg: str) -> None:
+        worker = self._update_check_worker
+        if worker is not None and worker.is_silent:
+            return
+        QMessageBox.warning(
+            self,
+            self._t("update_dlg_check_error_title"),
+            self._t("update_dlg_check_error_msg", error=error_msg),
+        )
+
+    def _start_update_install(self, remote_info: dict) -> None:
+        if (
+            self._update_install_worker is not None
+            and self._update_install_worker.isRunning()
+        ):
+            return
+
+        progress_dlg = QProgressDialog(
+            self._t("update_status_backup"),
+            None,
+            0,
+            100,
+            self,
+        )
+        progress_dlg.setWindowTitle(self._t("update_progress_title"))
+        progress_dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        progress_dlg.setMinimumDuration(0)
+        progress_dlg.setMinimumWidth(400)
+        progress_dlg.setAutoClose(False)
+        progress_dlg.setAutoReset(False)
+        progress_dlg.setValue(0)
+        progress_dlg.show()
+        self._update_progress_dialog = progress_dlg
+
+        worker = UpdateInstallWorker(remote_info, lang=self._lang, parent=self)
+        worker.progress_changed.connect(progress_dlg.setValue)
+        worker.status_changed.connect(progress_dlg.setLabelText)
+        worker.install_finished.connect(self._on_update_install_finished)
+        worker.install_failed.connect(self._on_update_install_failed)
+        worker.finished.connect(worker.deleteLater)
+        self._update_install_worker = worker
+        self._update_action_states()
+        worker.start()
+
+    def _close_update_progress_dialog(self) -> None:
+        if self._update_progress_dialog is not None:
+            self._update_progress_dialog.close()
+            self._update_progress_dialog.deleteLater()
+            self._update_progress_dialog = None
+
+    def _on_update_install_finished(self, remote_info: dict) -> None:
+        self._update_install_worker = None
+        self._close_update_progress_dialog()
+        self._update_action_states()
+
+        new_version = str(remote_info.get("version", ""))
+        codename = str(remote_info.get("codename", ""))
+        QMessageBox.information(
+            self,
+            self._t("update_dlg_success_title"),
+            self._t(
+                "update_dlg_success_msg",
+                version=new_version,
+                codename=codename,
+            ),
+        )
+        try:
+            restart_application()
+        finally:
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+
+    def _on_update_install_failed(self, error_msg: str) -> None:
+        self._update_install_worker = None
+        self._close_update_progress_dialog()
+        self._update_action_states()
+        QMessageBox.warning(
+            self,
+            self._t("update_dlg_failed_title"),
+            self._t("update_dlg_failed_msg", error=error_msg),
+        )
+
     def closeEvent(self, event) -> None:
+        if (
+            self._update_install_worker is not None
+            and self._update_install_worker.isRunning()
+        ):
+            event.ignore()
+            return
+        if (
+            self._update_check_worker is not None
+            and self._update_check_worker.isRunning()
+        ):
+            self._update_check_worker.wait(1000)
+
         active_worker = self._transcribe_worker or self._render_worker
         if active_worker is not None and active_worker.isRunning():
             reply = QMessageBox.question(
